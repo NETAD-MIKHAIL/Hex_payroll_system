@@ -1,17 +1,10 @@
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, shell, protocol, dialog } from 'electron';
+import { APPLICATION_ORIGIN, dataRoot, DesktopRuntime, desktopLog } from './runtime';
 import { get } from 'node:http';
 import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
 
-/**
- * Hex Payroll desktop shell.
- *
- * PHASE 0 SCOPE: window, preload, single-instance guard, and loading apps/web.
- *
- * NOT YET IMPLEMENTED (later phases):
- *   - spawning the private PostgreSQL cluster (Phase 4)
- *   - spawning the local Express API as a child process with an ephemeral
- *     loopback port and a per-launch bearer token (Phase 1/4)
- */
+/** Desktop shell; packaged service orchestration lives in runtime.ts. */
 
 /** Where apps/web's dev server listens (see apps/web/vite.config.ts). */
 const DEV_WEB_URL = process.env.HEX_WEB_DEV_URL ?? 'http://127.0.0.1:5273';
@@ -42,6 +35,65 @@ const DEV_SERVER_MAX_ATTEMPTS = 20;
 const DEV_SERVER_RETRY_MS = 500;
 
 let mainWindow: BrowserWindow | null = null;
+let runtime: DesktopRuntime | undefined;
+let quitting = false;
+let startupError = false;
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'hexpayroll',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
+  },
+]);
+let dataDirectoryError = false;
+if (app.isPackaged) {
+  try {
+    mkdirSync(dataRoot, { recursive: true });
+    app.setPath('userData', dataRoot);
+  } catch {
+    dataDirectoryError = true;
+  }
+}
+const stages: Record<string, string> = {
+  INITIALIZING: 'Preparing your payroll workspace...',
+  STARTING_DATABASE: 'Starting local database...',
+  RUNNING_MIGRATIONS: 'Preparing database schema...',
+  STARTING_API: 'Preparing payroll services...',
+  CHECKING_SERVICES: 'Checking local services...',
+  READY: 'Ready. Synchronization runs when available.',
+};
+function progress(state: string) {
+  const message = stages[state] ?? 'Preparing payroll services...';
+  if (mainWindow && !mainWindow.isDestroyed())
+    void mainWindow.webContents
+      .executeJavaScript(
+        `document.getElementById('progress')?.replaceChildren(${JSON.stringify(message)})`,
+      )
+      .catch(() => {});
+}
+async function failure(code: string) {
+  if (startupError || quitting || runtime?.isStopping) return;
+  startupError = true;
+  const reference = /^[A-Z_]+$/.test(code) ? code : 'STARTUP_FAILED';
+  await desktopLog('STARTUP_ERROR', reference);
+  mainWindow?.hide();
+  await runtime?.stop();
+  const result = await dialog.showMessageBox({
+    type: 'error',
+    title: 'Hex Payroll could not start',
+    message: 'A required local service is unavailable.',
+    detail:
+      'Reference: ' +
+      reference +
+      '. Your payroll database has been preserved. Check disk space and folder permissions. For missing application files, reinstall the same version. For database or migration failures, preserve the data folder and contact your administrator. Logs: ' +
+      join(dataRoot, 'logs'),
+    buttons: ['Close', 'Open logs', 'Retry'],
+    defaultId: 0,
+    cancelId: 0,
+  });
+  if (result.response === 1) await shell.openPath(join(dataRoot, 'logs'));
+  if (result.response === 2) app.relaunch();
+  app.quit();
+}
 
 /**
  * One readiness probe.
@@ -149,8 +201,12 @@ async function loadDevServer(window: BrowserWindow, attempt = 1): Promise<void> 
 
 async function loadUi(window: BrowserWindow): Promise<void> {
   if (app.isPackaged) {
-    // electron-builder ships apps/web/dist as an extra resource named "web".
-    await window.loadFile(join(process.resourcesPath, 'web', 'index.html'));
+    // The fixed application origin serves static resources and proxies authenticated API requests.
+    await window.loadURL(
+      APPLICATION_ORIGIN +
+        '/index.html' +
+        (process.argv.includes('--admin') ? '?maintenance=1#/desktop-admin' : ''),
+    );
     return;
   }
 
@@ -158,7 +214,7 @@ async function loadUi(window: BrowserWindow): Promise<void> {
   console.log(`[desktop] UI loaded from ${DEV_WEB_URL}`);
 }
 
-function createWindow(): void {
+async function createWindow(): Promise<void> {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -183,16 +239,44 @@ function createWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+  mainWindow.on('query-session-end', () => {
+    void runtime?.stop();
+  });
 
   // Never let the renderer spawn arbitrary Electron windows.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    try {
+      if (new URL(url).protocol === 'https:') void shell.openExternal(url);
+    } catch {
+      /* Reject malformed links. */
+    }
     return { action: 'deny' };
   });
 
-  void loadUi(mainWindow).catch((error: unknown) => {
-    console.error('[desktop] failed to load the UI:', error);
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const allowed = app.isPackaged
+      ? url.startsWith(APPLICATION_ORIGIN + '/')
+      : new URL(url).origin === new URL(DEV_WEB_URL).origin;
+    if (!allowed) event.preventDefault();
   });
+  mainWindow.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  if (app.isPackaged && !runtime) {
+    const html =
+      '<!doctype html><html><meta charset="utf-8"><title>Hex Payroll</title><body style="background:#020617;color:#e2e8f0;font:18px system-ui;display:grid;place-content:center;height:90vh"><h1>HEX PAYROLL</h1><p id="progress">Preparing your payroll workspace...</p><p style="font-size:13px;color:#94a3b8">Local payroll remains available offline.</p></body></html>';
+    await mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    mainWindow.show();
+    runtime = new DesktopRuntime(progress, (code) => {
+      void failure(code);
+    });
+    try {
+      await runtime.start();
+      await loadUi(mainWindow);
+    } catch (error) {
+      await failure(error instanceof Error ? error.message : 'STARTUP_FAILED');
+    }
+  } else {
+    await loadUi(mainWindow);
+  }
 }
 
 /*
@@ -221,6 +305,16 @@ if (!hasSingleInstanceLock) {
     .whenReady()
     .then(async () => {
       app.setAppUserModelId('ph.hexpayroll.desktop');
+      if (dataDirectoryError) {
+        dialog.showErrorBox(
+          'Hex Payroll storage unavailable',
+          'The application data folder cannot be created or opened: ' +
+            dataRoot +
+            '. Check folder permissions and available disk space, then reopen Hex Payroll. Existing payroll data has not been reset.',
+        );
+        app.quit();
+        return;
+      }
 
       // Development only: a packaged shell loads the built UI from disk, so there is
       // nothing to wait for. `HEX_WEB_WAIT_TIMEOUT_MS=0` opts out of the gate. A timeout
@@ -230,11 +324,11 @@ if (!hasSingleInstanceLock) {
         await waitForDevServer(DEV_WEB_URL);
       }
 
-      createWindow();
+      await createWindow();
 
       app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
-          createWindow();
+          void createWindow();
         }
       });
     })
@@ -246,6 +340,14 @@ if (!hasSingleInstanceLock) {
       app.exit(1);
     });
 
+  app.on('before-quit', (event) => {
+    if (!runtime || quitting) return;
+    event.preventDefault();
+    void runtime.stop().finally(() => {
+      quitting = true;
+      app.quit();
+    });
+  });
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
       app.quit();

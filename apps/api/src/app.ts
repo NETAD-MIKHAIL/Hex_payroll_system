@@ -71,13 +71,21 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
  * entrypoints.
  */
 export function createApp(
-  options: { database?: Pool; mode?: 'disabled' | 'local' | 'central' } = {},
+  options: {
+    database?: Pool;
+    mode?: 'disabled' | 'local' | 'central';
+    desktop?: { guard: RequestHandler; bootstrap: RequestHandler };
+  } = {},
 ): Express {
   const app = express();
   const pool = options.database ?? defaultPool;
   const mode = options.mode ?? env.SYNC_MODE;
 
   app.disable('x-powered-by');
+  if (options.desktop) {
+    app.use(options.desktop.guard);
+    app.use(options.desktop.bootstrap);
+  }
   // Before the body parser: a preflight carries no body, and a rejected origin
   // must not be able to make the server parse anything.
   app.use(corsMiddleware);

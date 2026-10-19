@@ -1,0 +1,8 @@
+{
+  "version": "18.6",
+  "architecture": "x64",
+  "source": "https://sbp.enterprisedb.com/getfile.jsp?fileid=1260609",
+  "distributionPage": "https://www.enterprisedb.com/download-postgresql-binaries",
+  "sha256": "e2246ba91d22345bc3d017586c09ede52d9df180b1eeb480f050445f1cad84e2",
+  "checksumProvenance": "Recorded from HTTPS EDB archive; not an independently published vendor checksum."
+}

@@ -1,0 +1,13 @@
+diff --git a/out/vm/WineVm.js b/out/vm/WineVm.js
+index dd689aa81147f8378c5fbc093797ad235ca6170a..3ac442ae8268fe231bd1fc12e539575842006dd2 100644
+--- a/out/vm/WineVm.js
++++ b/out/vm/WineVm.js
+@@ -26,7 +26,7 @@ class WineVmManager extends vm_1.VmManager {
+             options.timeout = 120 * 1000;
+         }
+         if (process.platform === "win32") {
+-            return (0, builder_util_1.exec)(target, appArgs, options);
++            return (0, builder_util_1.exec)(target, appArgs, { ...options, env: { ...process.env, ...options.env } });
+         }
+         const { execPath: wineExe, env: wineEnv } = await (0, wine_1.getWineToolset)(toolset);
+         // Preserve the base process environment (PATH, HOME, TMPDIR, etc.) so Wine and child

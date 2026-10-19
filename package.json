@@ -19,7 +19,11 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "pnpm -r --if-present test",
-    "test:integration": "pnpm --filter @hexpayroll/api test:integration"
+    "test:integration": "pnpm --filter @hexpayroll/api test:integration",
+    "desktop:stage": "node scripts/prepare-desktop.mjs",
+    "desktop:pack": "pnpm build && pnpm desktop:stage && pnpm --filter @hexpayroll/desktop exec electron-builder --config electron-builder.yml --win --x64 --dir",
+    "desktop:dist": "pnpm build && pnpm desktop:stage && pnpm --filter @hexpayroll/desktop exec electron-builder --config electron-builder.yml --win nsis --x64",
+    "test:desktop": "node scripts/test-desktop-runtime.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

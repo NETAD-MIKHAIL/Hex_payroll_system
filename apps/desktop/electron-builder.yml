@@ -1,10 +1,8 @@
-# electron-builder configuration.
-#
-# PHASE 0: present and coherent, but packaging is NOT part of the Phase 0
-# acceptance criteria. Installer production happens in Phase 4, together with
-# bundling the private PostgreSQL cluster.
+# Windows x64 desktop distribution. Runtime staging is required before packaging.
 appId: ph.hexpayroll.desktop
 productName: Hex Payroll
+beforePack: scripts/validate-desktop.cjs
+afterPack: scripts/copy-runtime.cjs
 copyright: Copyright © 2026 Hex Payroll
 
 directories:
@@ -16,19 +14,32 @@ files:
   - out/**
   - package.json
 
-# apps/web's production build is shipped alongside the app and loaded over
-# file:// by the main process — see apps/desktop/src/main/index.ts.
+# Static renderer resources are served through the fixed application protocol.
 extraResources:
   - from: ../web/dist
     to: web
+  - from: build/runtime/api
+    to: api
+  - from: build/runtime/postgres
+    to: postgres
+  - from: build/runtime/migrations
+    to: migrations
+  - from: build/runtime/notices
+    to: notices
+  - from: build/runtime/package-manifest.json
+    to: package-manifest.json
 
 win:
+  icon: build/icon.ico
+  requestedExecutionLevel: asInvoker
   target:
     - nsis
-  # Code signing is REQUIRED before distributing to real users: an unsigned
-  # installer triggers Windows SmartScreen warnings on every machine.
+  # Supply an approved signing identity before production distribution.
+  # Unsigned builds may trigger SmartScreen or application-control policies.
 
 nsis:
+  artifactName: Hex Payroll Setup.exe
+  deleteAppDataOnUninstall: false
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
@@ -38,4 +49,4 @@ nsis:
 # Auto-update is intentionally NOT configured.
 # For a payroll system, silently shipping changed contribution or tax tables
 # mid-period is an incident rather than a convenience. It will be added
-# deliberately, with an explicit opt-in, in Phase 4.
+# deliberately in Phase 4.5 or later.

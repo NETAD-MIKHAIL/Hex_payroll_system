@@ -1,4 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
+import { DesktopSetup } from './pages/DesktopSetup';
+import { DesktopAdmin } from './pages/DesktopAdmin';
 import { LoginPage } from './pages/LoginPage';
 import { AppLayout } from './layouts/AppLayout';
 import { DashboardPage } from './pages/DashboardPage';
@@ -42,6 +44,12 @@ import { SystemHealthProvider } from './components/system/useSystemHealth';
 import { AuthProvider, useAuth } from './auth/AuthProvider';
 function AppRoutes() {
   const { session } = useAuth();
+  if (
+    window.location.protocol === 'hexpayroll:' &&
+    new URLSearchParams(window.location.search).get('maintenance') === '1'
+  ) {
+    return session ? <DesktopAdmin /> : <LoginPage />;
+  }
   return (
     <Routes>
       <Route
@@ -49,6 +57,7 @@ function AppRoutes() {
         element={session ? <Navigate to="/dashboard" replace /> : <LoginPage />}
       />
       <Route element={session ? <AppLayout /> : <Navigate to="/login" replace />}>
+        <Route path="/desktop-admin" element={<DesktopAdmin />} />
         <Route
           path="/sync/conflicts"
           element={
@@ -276,10 +285,12 @@ function AppRoutes() {
 }
 export default function App() {
   return (
-    <SystemHealthProvider>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
-    </SystemHealthProvider>
+    <DesktopSetup>
+      <SystemHealthProvider>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </SystemHealthProvider>
+    </DesktopSetup>
   );
 }
