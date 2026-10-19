@@ -20,7 +20,8 @@
     "sync:user": "tsx src/cli/sync-user.ts",
     "auth:create-user": "tsx src/cli/create-user.ts",
     "test": "tsx --test test/*.test.ts",
-    "test:local": "tsx src/cli/test-local.ts"
+    "test:local": "tsx src/cli/test-local.ts",
+    "test:integration": "tsx src/cli/test-integration.ts"
   },
   "dependencies": {
     "@hexpayroll/payroll-engine": "workspace:*",

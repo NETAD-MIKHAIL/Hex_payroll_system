@@ -36,10 +36,12 @@ await writeFile(
     .replace('type AnyPgColumn', 'type PgTableExtraConfigValue')
     // Preserve PostgreSQL bigint identity bounds without JS numeric rounding.
     .replace(/(maxValue: )9223372036854775807/g, '$1"9223372036854775807"')
-    .replace(/export const sync(?:Nodes|Changes|Inbox|Outbox)[\s\S]*?\n\]\);/g, (block) =>
-      block
-        .replace(/mode: "number"/g, 'mode: "bigint"')
-        .replace(/(bigint\([^\n]*?)\.default\(0\)/g, '$1.default(0n)'),
+    .replace(
+      /export const sync(?:Nodes|Changes|Inbox|Outbox|Checkpoints)[\s\S]*?\n\]\);/g,
+      (block) =>
+        block
+          .replace(/mode: "number"/g, 'mode: "bigint"')
+          .replace(/(bigint\([^\n]*?)\.default\(0\)/g, '$1.default(0n)'),
     )
     .replaceAll('}, (table) => [', '}, (table): PgTableExtraConfigValue[] => ['),
 );

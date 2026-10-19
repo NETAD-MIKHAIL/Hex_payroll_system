@@ -1,7 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
-import { syncEventSchema, syncPushResponseSchema } from '@hexpayroll/shared';
-import { transaction } from '../foundation/repository.js';
+import {
+  syncEventSchema,
+  centralPushResponseSchema,
+  syncPushResponseSchema,
+  structuredPushResponseSchema,
+  syncSequenceSchema,
+} from '@hexpayroll/shared';
+import { persistConflict } from './conflicts.js';
+import { dependencyKeys } from './conflict-policy.js';
+import { transaction, DomainError } from '../foundation/repository.js';
 import { tokenHash } from '../auth/service.js';
 import {
   TransportError,
@@ -19,7 +27,12 @@ export async function ensureNode(pool: Pool, config: SyncClientConfig) {
     'SELECT organization_id FROM sync_nodes WHERE id=$1 AND token_hash=$2 AND enabled AND revoked_at IS NULL',
     [config.nodeId, tokenHash(config.token)],
   );
-  if (!result.rows[0]) throw new Error('Local installation not enrolled');
+  if (!result.rows[0])
+    throw new DomainError(
+      403,
+      'LOCAL_NODE_INVALID',
+      'Local installation credential does not match its registered device',
+    );
   return result.rows[0].organization_id;
 }
 export interface PushOptions extends RequestOptions {
@@ -64,12 +77,23 @@ export async function pushNextBatch(
     const result = await c.query(
       `SELECT *, (next_attempt_at IS NULL OR next_attempt_at<=clock_timestamp()) AS due,
          (lease_expires_at IS NULL OR lease_expires_at<=clock_timestamp()) AS expired
-       FROM sync_outbox WHERE organization_id=$1 AND status<>'synced'
-       ORDER BY publication_sequence LIMIT $2 FOR UPDATE`,
-      [org, batchSize],
+       FROM sync_outbox WHERE organization_id=$1 AND status NOT IN ('synced','rejected','superseded')
+       ORDER BY publication_sequence LIMIT 1000 FOR UPDATE`,
+      [org],
     );
     const claimed = [];
+    const blocked = new Set<string>();
     for (const row of result.rows) {
+      const keys: string[] | null =
+        row.dependency_keys ?? dependencyKeys(row.entity_type, row.entity_id, row.payload);
+      if (
+        row.status === 'conflicted' ||
+        (blocked.size && (!keys || keys.some((key) => blocked.has(key))))
+      ) {
+        if (!keys) break;
+        for (const key of keys) blocked.add(key);
+        continue;
+      }
       if (row.status === 'failed' || (row.status === 'processing' ? !row.expired : !row.due)) break;
       if (row.retry_cycle_attempts >= maxAttempts) {
         await c.query(
@@ -86,16 +110,17 @@ export async function pushNextBatch(
         [row.id, lease, leaseMs],
       );
       claimed.push(updated.rows[0]!);
+      if (claimed.length === batchSize) break;
     }
     return claimed;
   });
   if (!rows.length) {
     if (options.status) {
       const head = await pool.query(
-        "SELECT status FROM sync_outbox WHERE organization_id=$1 AND status<>'synced' ORDER BY publication_sequence LIMIT 1",
+        "SELECT status FROM sync_outbox WHERE organization_id=$1 AND status NOT IN ('synced','rejected','superseded') ORDER BY publication_sequence LIMIT 1",
         [org],
       );
-      if (head.rows[0]?.status === 'failed') options.status.state = 'blocked';
+      if (['failed', 'conflicted'].includes(head.rows[0]?.status)) options.status.state = 'blocked';
     }
     return false;
   }
@@ -116,13 +141,182 @@ export async function pushNextBatch(
       originNodeId: r.origin_node_id,
       baseRevision: r.base_revision,
       createdAt: new Date(r.created_at).toISOString(),
+      actorId: r.actor_id ?? null,
     }));
     const signal = requestSignal({ ...options, timeoutMs });
     const transport = options.transport ?? httpPushTransport(config, timeoutMs);
     transportAttempted = true;
-    const response = syncPushResponseSchema.parse(
-      await abortable(() => transport.push(events, signal), signal),
-    );
+    const raw = await abortable(() => transport.push(events, signal), signal);
+    const v2 = centralPushResponseSchema.safeParse(raw);
+    if (!options.transport && !v2.success)
+      throw new TransportError(426, 'SYNC_PROTOCOL_INCOMPATIBLE');
+    if (v2.success) {
+      const outcomes = v2.data.results;
+      if (
+        outcomes.length !== rows.length ||
+        new Set(outcomes.map((o) => o.eventId)).size !== rows.length ||
+        outcomes.some((o) => !rows.some((r) => r.id === o.eventId))
+      )
+        throw new Error('Invalid delivery results');
+      const accepted = outcomes.filter((o) => 'sequence' in o);
+      if (new Set(accepted.map((o) => o.sequence)).size !== accepted.length)
+        throw new Error('Duplicate receipt sequence');
+      await transaction(pool, async (c) => {
+        for (const row of rows) {
+          const owned = await c.query(
+            "SELECT id FROM sync_outbox WHERE id=$1 AND organization_id=$2 AND lease_token=$3 AND status='processing' AND lease_expires_at>clock_timestamp() FOR UPDATE",
+            [row.id, org, lease],
+          );
+          if (owned.rowCount !== 1) throw new StaleLeaseError('Delivery lease no longer owned');
+        }
+        for (const outcome of outcomes) {
+          const row = rows.find((r) => r.id === outcome.eventId)!;
+          if ('sequence' in outcome) {
+            await c.query(
+              "UPDATE sync_outbox SET status='synced',delivery_protocol_version=2,central_sequence=$2,synced_at=now(),lease_token=NULL,lease_expires_at=NULL,next_attempt_at=NULL,error=NULL WHERE id=$1",
+              [row.id, outcome.sequence],
+            );
+          } else if (outcome.status === 'conflict') {
+            const parsed = structuredPushResponseSchema.parse({
+              outcomes: [
+                {
+                  eventId: outcome.eventId,
+                  outcome: 'conflict',
+                  conflictType: outcome.conflictType,
+                  currentRevision: outcome.currentRevision,
+                  snapshot: outcome.snapshot,
+                  reason: outcome.reason,
+                },
+              ],
+            }).outcomes[0]!;
+            if (parsed.outcome !== 'conflict') throw new Error('Invalid conflict');
+            if (
+              parsed.snapshot &&
+              (parsed.snapshot.organizationId ?? parsed.snapshot.organization_id) !== org
+            )
+              throw new Error('Conflict scope mismatch');
+            await persistConflict(c, {
+              organizationId: org,
+              nodeId: row.origin_node_id,
+              eventId: row.id,
+              localEventId: row.id,
+              entityType: row.entity_type,
+              entityId: row.entity_id,
+              incomingRevision: row.revision,
+              baseRevision: row.base_revision,
+              currentRevision: parsed.currentRevision,
+              incoming: row.payload,
+              current: parsed.snapshot,
+              conflictType: parsed.conflictType,
+              reason: parsed.reason,
+            });
+            await c.query(
+              "UPDATE sync_outbox SET status='conflicted',lease_token=NULL,lease_expires_at=NULL,error='Data conflict requires review' WHERE id=$1",
+              [row.id],
+            );
+          } else {
+            const retry =
+              outcome.status === 'retryable_failure' && row.retry_cycle_attempts < maxAttempts;
+            await c.query(
+              "UPDATE sync_outbox SET status=$2,error=$3,lease_token=NULL,lease_expires_at=NULL,next_attempt_at=CASE WHEN $2='pending' THEN now()+($4::double precision*interval '1 millisecond') ELSE NULL END WHERE id=$1",
+              [
+                row.id,
+                retry ? 'pending' : outcome.status === 'rejected' ? 'rejected' : 'failed',
+                outcome.code + ': ' + outcome.reason,
+                retryDelayMs(row.retry_cycle_attempts, options.random),
+              ],
+            );
+          }
+        }
+      });
+      transportVerified = true;
+      options.status?.recordTransport(true);
+      return true;
+    }
+    const structured = structuredPushResponseSchema.safeParse(raw);
+    if (structured.success) {
+      const outcomes = structured.data.outcomes;
+      if (
+        outcomes.some(
+          (outcome) =>
+            outcome.outcome === 'conflict' &&
+            outcome.snapshot &&
+            (('organizationId' in outcome.snapshot && outcome.snapshot.organizationId !== org) ||
+              ('organization_id' in outcome.snapshot && outcome.snapshot.organization_id !== org)),
+        )
+      )
+        throw new Error('Invalid conflict organization');
+      if (
+        outcomes.length !== rows.length ||
+        new Set(outcomes.map((o) => o.eventId)).size !== rows.length ||
+        outcomes.some((o) => !rows.some((r) => r.id === o.eventId))
+      )
+        throw new Error('Invalid delivery outcomes');
+      const accepted = outcomes.filter((o) => o.outcome === 'accepted');
+      if (
+        new Set(accepted.map((o) => o.sequence)).size !== accepted.length ||
+        accepted.some((o) => !syncSequenceSchema.safeParse(o.sequence).success)
+      )
+        throw new Error('Invalid delivery sequences');
+      // An adapter cannot acknowledge a consumer of a conflicted predecessor.
+      const blocked = new Set<string>();
+      let barrier = false;
+      for (const row of rows) {
+        const outcome = outcomes.find((o) => o.eventId === row.id)!;
+        const keys = dependencyKeys(row.entity_type, row.entity_id, row.payload);
+        if (
+          outcome.outcome === 'accepted' &&
+          (barrier || (blocked.size > 0 && (!keys || keys.some((k) => blocked.has(k)))))
+        )
+          throw new Error('Invalid dependent delivery outcome');
+        if (outcome.outcome === 'conflict') {
+          if (!keys) barrier = true;
+          else keys.forEach((k) => blocked.add(k));
+        }
+      }
+      transportVerified = true;
+      options.status?.recordTransport(true);
+      await transaction(pool, async (c) => {
+        for (const row of rows) {
+          const owned = await c.query(
+            "SELECT id FROM sync_outbox WHERE organization_id=$1 AND id=$2 AND lease_token=$3 AND status='processing' AND lease_expires_at>clock_timestamp() FOR UPDATE",
+            [org, row.id, lease],
+          );
+          if (owned.rowCount !== 1) throw new StaleLeaseError('Delivery lease no longer owned');
+        }
+        for (const outcome of outcomes) {
+          const row = rows.find((r) => r.id === outcome.eventId)!;
+          if (outcome.outcome === 'accepted')
+            await c.query(
+              "UPDATE sync_outbox SET status='synced',central_sequence=$2,synced_at=now(),lease_token=NULL,lease_expires_at=NULL,next_attempt_at=NULL,error=NULL WHERE id=$1",
+              [row.id, outcome.sequence],
+            );
+          else {
+            await persistConflict(c, {
+              organizationId: org,
+              nodeId: row.origin_node_id,
+              eventId: row.id,
+              localEventId: row.id,
+              entityType: row.entity_type,
+              entityId: row.entity_id,
+              incomingRevision: row.revision,
+              baseRevision: row.base_revision,
+              currentRevision: outcome.currentRevision,
+              incoming: row.payload,
+              current: outcome.snapshot,
+              conflictType: outcome.conflictType,
+              reason: 'Authoritative validation reported ' + outcome.conflictType,
+            });
+            await c.query(
+              "UPDATE sync_outbox SET status='conflicted',lease_token=NULL,lease_expires_at=NULL,next_attempt_at=NULL,error='Data conflict requires review' WHERE id=$1",
+              [row.id],
+            );
+          }
+        }
+      });
+      return true;
+    }
+    const response = syncPushResponseSchema.parse(raw);
     if (
       response.receipts.length !== rows.length ||
       new Set(response.receipts.map((r) => r.eventId)).size !== rows.length ||
@@ -146,8 +340,15 @@ export async function pushNextBatch(
   } catch (error) {
     if (transportAttempted && !transportVerified && !options.signal?.aborted)
       options.status?.recordTransport(false);
+    if (
+      error instanceof TransportError &&
+      [401, 403, 426].includes(error.status) &&
+      options.status
+    ) {
+      options.status.failAuthorization(error.code);
+    }
     const permanent =
-      error instanceof TransportError && [400, 401, 403, 409, 413, 422].includes(error.status);
+      error instanceof TransportError && [400, 401, 403, 409, 413, 422, 426].includes(error.status);
     await transaction(pool, async (c) => {
       for (const row of rows) {
         const failed = permanent || row.retry_cycle_attempts >= maxAttempts;

@@ -1,3 +1,4 @@
+import { chunkRunSnapshot } from '../sync/snapshots.js';
 import { enqueueOutbox } from '../sync/outbox.js';
 import { createHash } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
@@ -93,7 +94,7 @@ function revision(p: PeriodRow, expected: number) {
   if (p.revision !== expected)
     throw new DomainError(409, 'REVISION_CONFLICT', 'Payroll changed; refresh before continuing');
 }
-async function event(
+export async function event(
   c: PoolClient,
   a: Actor,
   entity: string,
@@ -101,6 +102,54 @@ async function event(
   description: string,
   operation = 'CREATE',
 ) {
+  // Finalization publishes one compact manifest over previously published immutable
+  // snapshots. The receiver verifies all components before freezing run + period.
+  if (entity === 'payroll_runs' && row.finalized === true) {
+    await c.query(
+      'INSERT INTO audit_events(organization_id,user_id,action,entity_type,entity_id,description,metadata) VALUES($1,$2,$3,$4,$5,$6,$7)',
+      [
+        a.organizationId,
+        a.id,
+        'UPDATE',
+        entity,
+        row.id,
+        description,
+        JSON.stringify({ revision: row.revision }),
+      ],
+    );
+    return;
+  }
+  if (entity === 'payroll_periods' && row.status === 'finalized') {
+    const manifest: Record<string, unknown> = {};
+    const run = (await c.query('SELECT * FROM payroll_runs WHERE id=$1', [row.latest_run_id]))
+      .rows[0];
+    manifest.run = {
+      id: run.id,
+      baseRevision: Number(run.revision) - 1,
+      hash: fingerprint({ ...run, finalized: false, revision: Number(run.revision) - 1 }),
+    };
+    for (const table of [
+      'employee_payroll_results',
+      'payroll_earning_lines',
+      'payroll_deduction_lines',
+      'payroll_contribution_lines',
+    ]) {
+      const components =
+        table === 'employee_payroll_results'
+          ? await c.query(
+              'SELECT * FROM employee_payroll_results WHERE payroll_run_id=$1 ORDER BY id',
+              [run.id],
+            )
+          : await c.query(
+              `SELECT l.* FROM ${table} l JOIN employee_payroll_results r ON r.id=l.result_id WHERE r.payroll_run_id=$1 ORDER BY l.id`,
+              [run.id],
+            );
+      manifest[table] = { count: components.rowCount, hash: fingerprint(components.rows) };
+    }
+    row = { ...row, finalization: manifest };
+  }
+  if (entity === 'payroll_runs' && Buffer.byteLength(JSON.stringify(row)) > 200000)
+    row = await chunkRunSnapshot(c, a.organizationId!, row, a.id);
   const payload = JSON.stringify(row);
   if (Buffer.byteLength(payload) > 262144)
     throw new DomainError(
@@ -127,6 +176,7 @@ async function event(
     operation,
     revision: Number(row.revision ?? 1),
     payload: row,
+    actorId: a.id,
   });
 }
 async function supersede(
@@ -792,7 +842,7 @@ const emptyResult = (id: string, message: string): PayrollResult => ({
   taxTrace: {},
   issues: [{ code: 'EMPLOYEE_CALCULATION_FAILED', severity: 'error', message }],
 });
-async function saveResult(
+export async function saveResult(
   c: PoolClient,
   a: Actor,
   runId: string,
@@ -1103,7 +1153,7 @@ export function createPayrollService(pool: Pool) {
           c,
           a,
           'payroll_runs',
-          { ...updated, snapshot: undefined },
+          updated,
           recompute ? 'Payroll recomputed' : 'Payroll computed',
         );
         // Publish the parent run before employee results and their lines.
@@ -1486,7 +1536,7 @@ export function createPayrollService(pool: Pool) {
     },
   };
 }
-async function reconcile(c: PoolClient, runId: string, totals: Record<string, number>) {
+export async function reconcile(c: PoolClient, runId: string, totals: Record<string, number>) {
   const results = (
     await c.query('SELECT * FROM employee_payroll_results WHERE payroll_run_id=$1', [runId])
   ).rows;

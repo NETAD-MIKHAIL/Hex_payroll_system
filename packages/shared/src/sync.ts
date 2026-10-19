@@ -64,3 +64,68 @@ export const syncRegistrationResponseSchema = z
   .strict();
 export type SyncEvent = z.infer<typeof syncEventSchema>;
 export type SyncChange = z.infer<typeof syncChangeSchema>;
+
+// Protocol v2 acknowledges committed business application.
+export const centralEventSchema = syncEventSchema
+  .extend({
+    baseRevision: z.number().int().min(0).max(2147483647),
+    originNodeId: z.uuid(),
+    actorId: z.uuid().nullable(),
+  })
+  .strict();
+export const centralPushSchema = z
+  .object({ protocolVersion: z.literal(2), events: z.array(centralEventSchema).min(1).max(3) })
+  .strict();
+export const centralPushResponseSchema = z
+  .object({
+    protocolVersion: z.literal(2),
+    results: z
+      .array(
+        z.union([
+          z
+            .object({
+              eventId: z.uuid(),
+              status: z.enum(['accepted', 'already_applied']),
+              sequence: syncSequenceSchema.refine((v) => v !== '0'),
+              revision: z.number().int().positive(),
+            })
+            .strict(),
+          z
+            .object({
+              eventId: z.uuid(),
+              status: z.enum(['rejected', 'retryable_failure']),
+              code: z.string().max(100),
+              reason: z.string().max(1000),
+            })
+            .strict(),
+          z
+            .object({
+              eventId: z.uuid(),
+              status: z.literal('conflict'),
+              conflictId: z.uuid(),
+              conflictType: z.string(),
+              currentRevision: z.number().int().positive().nullable(),
+              snapshot: syncEventSchema.shape.payload.nullable(),
+              reason: z.string().max(1000),
+            })
+            .strict(),
+        ]),
+      )
+      .min(1)
+      .max(3),
+  })
+  .strict();
+export const centralChangeSchema = syncChangeSchema
+  .extend({ baseRevision: z.number().int().nonnegative(), actorId: z.uuid().nullable() })
+  .strict();
+export const centralPullResponseSchema = z
+  .object({
+    protocolVersion: z.literal(2),
+    changes: z.array(centralChangeSchema).max(3),
+    nextSequence: syncSequenceSchema,
+    hasMore: z.boolean(),
+  })
+  .strict();
+export type CentralEvent = z.infer<typeof centralEventSchema>;
+export type CentralChange = z.infer<typeof centralChangeSchema>;
+export type CentralResult = z.infer<typeof centralPushResponseSchema>['results'][number];

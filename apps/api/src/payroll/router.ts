@@ -15,6 +15,7 @@ import {
 import type { Actor } from '../foundation/repository.js';
 import { authenticate } from '../timekeeping/middleware.js';
 import { payrollErrors } from './errors.js';
+import { captureLocalConflict } from '../sync/local-conflicts.js';
 import { createPayrollService } from './services.js';
 export function createPayrollRouter(pool: Pool) {
   const router = Router(),
@@ -117,6 +118,7 @@ export function createPayrollRouter(pool: Pool) {
       ),
     ),
   );
+  router.use('/payroll', captureLocalConflict(pool));
   router.use('/payroll', payrollErrors);
   return router;
 }

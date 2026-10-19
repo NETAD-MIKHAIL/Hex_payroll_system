@@ -58,6 +58,9 @@ export const permissionCodes = [
   'system_health.view',
   'audit.view',
   'sync.view',
+  'sync.conflicts.view',
+  'sync.conflicts.resolve',
+  'sync.conflicts.escalate',
 ] as const;
 export const permissionSchema = z.enum(permissionCodes);
 export type Permission = z.infer<typeof permissionSchema>;
@@ -348,6 +351,11 @@ export const auditEventSchema = z
       'LOGOUT',
       'CONFIG_CHANGE',
       'ROLE_CHANGE',
+      'CONFLICT_DETECTED',
+      'CONFLICT_REVIEWED',
+      'CONFLICT_RESOLVED',
+      'CONFLICT_REJECTED',
+      'CONFLICT_ESCALATED',
     ]),
     entityType: z.string(),
     entityId: z.uuid().nullable(),
@@ -364,6 +372,11 @@ export const syncSummarySchema = z
     mode: z.enum(['disabled', 'local', 'central']),
     awaitingApplication: z.number().int().nonnegative(),
     conflicts: z.number().int().nonnegative(),
+    resolvedConflicts: z.number().int().nonnegative().default(0),
+    lastSyncAttempt: z.iso.datetime().nullable().default(null),
+    conflicted: z.number().int().nonnegative().default(0),
+    rejected: z.number().int().nonnegative().default(0),
+    superseded: z.number().int().nonnegative().default(0),
     lastSuccessfulPush: z.iso.datetime().nullable(),
     workerState: z.enum([
       'disabled',

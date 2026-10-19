@@ -90,13 +90,15 @@ export function useHealthItems() {
       label: sync.isError
         ? 'Status unavailable'
         : syncData
-          ? syncData.transportAvailability === 'available'
-            ? `${syncData.pending} pending`
-            : syncData.transportAvailability
+          ? syncData.conflicts > 0
+            ? `${syncData.conflicts} data conflicts`
+            : syncData.transportAvailability === 'available'
+              ? `${syncData.pending} pending`
+              : syncData.transportAvailability
           : 'Unknown',
       tone: sync.isError
         ? 'warning'
-        : syncData?.failed
+        : syncData?.failed || syncData?.conflicts
           ? 'warning'
           : syncData?.transportAvailability === 'available'
             ? 'healthy'
@@ -106,7 +108,7 @@ export function useHealthItems() {
                 ? 'not-configured'
                 : 'checking',
       detail: syncData
-        ? `Worker: ${syncData.workerState}. ${syncData.pending} pending, ${syncData.processing} processing, ${syncData.failed} failed. Last successful push: ${syncData.lastSuccessfulPush ?? 'none'}. Local operations remain available offline.`
+        ? `Worker: ${syncData.workerState}. Transport: ${syncData.transportAvailability}. ${syncData.pending} pending, ${syncData.processing} processing, ${syncData.failed} failed. ${syncData.conflicts} open data conflicts, ${syncData.resolvedConflicts} resolved. Last attempt: ${syncData.lastSyncAttempt ?? 'none'}. Last successful push: ${syncData.lastSuccessfulPush ?? 'none'}. Local operations remain available offline.`
         : 'Synchronization status has not been verified.',
     },
   ];
@@ -156,9 +158,22 @@ export function SystemHealthWidget() {
   );
 }
 export function SystemHealthPage() {
+  const { session } = useAuth();
   const { health, sync, syncEnabled, items, data, integration } = useHealthItems();
   return (
     <div className="space-y-5">
+      {syncEnabled && !sync.isError && sync.data && (
+        <p className="notice">
+          Pending events: {sync.data.pending}. Failed events: {sync.data.failed}. Open data
+          conflicts: {sync.data.conflicts}. Resolved conflicts: {sync.data.resolvedConflicts}. Last
+          sync attempt: {sync.data.lastSyncAttempt ?? 'none'}.{' '}
+          {session?.user.permissions?.includes('sync.conflicts.view') && (
+            <Link className="text-action" to="/sync/conflicts">
+              Review conflicts
+            </Link>
+          )}
+        </p>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-slate-600">
           Local infrastructure and connectivity are monitored separately.

@@ -14,12 +14,16 @@ export type OutgoingEvent = SyncEvent & {
   originNodeId: string;
   baseRevision: number;
   createdAt: string;
+  actorId?: string | null;
 };
 export interface PushTransport {
   push(events: readonly OutgoingEvent[], signal: AbortSignal): Promise<unknown>;
 }
 export class TransportError extends Error {
-  constructor(public status: number) {
+  constructor(
+    public status: number,
+    public code = 'HTTP_ERROR',
+  ) {
     super(`Synchronization HTTP ${status}`);
   }
 }
@@ -53,16 +57,13 @@ export async function syncRequest(
     method: body === undefined ? 'GET' : 'POST',
     headers: {
       Authorization: `Bearer ${config.token}`,
+      'X-Hex-Sync-Protocol': '2',
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: requestSignal(options),
     redirect: 'error',
   });
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new TransportError(response.status);
-  }
   const reader = response.body?.getReader();
   if (!reader) throw new Error('Empty synchronization response');
   const chunks: Uint8Array[] = [];
@@ -72,13 +73,31 @@ export async function syncRequest(
       const part = await reader.read();
       if (part.done) break;
       size += part.value.byteLength;
-      if (size > 1048576) throw new Error('Synchronization response exceeds limit');
+      if (size > (response.ok ? 1048576 : 4096))
+        throw new Error('Synchronization response exceeds limit');
       chunks.push(part.value);
     }
   } finally {
     await reader.cancel();
   }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+  const bodyText = Buffer.concat(chunks).toString('utf8');
+  if (!response.ok) {
+    let code = 'HTTP_ERROR';
+    try {
+      const body = JSON.parse(bodyText) as { error?: { code?: unknown } };
+      if (
+        typeof body.error?.code === 'string' &&
+        ['NODE_REVOKED', 'NODE_DISABLED', 'NODE_INVALID', 'SYNC_PROTOCOL_INCOMPATIBLE'].includes(
+          body.error.code,
+        )
+      )
+        code = body.error.code;
+    } catch {
+      /* Untrusted error bodies are not exposed. */
+    }
+    throw new TransportError(response.status, code);
+  }
+  return JSON.parse(bodyText) as unknown;
 }
 
 export function httpPushTransport(config: SyncClientConfig, timeoutMs: number): PushTransport {
@@ -88,10 +107,23 @@ export function httpPushTransport(config: SyncClientConfig, timeoutMs: number): 
         config,
         'push',
         {
-          // Keep the existing central wire contract; retain metadata locally for a
-          // future versioned adapter rather than modifying business snapshots.
+          protocolVersion: 2,
           events: events.map(
-            ({ eventId, entityType, entityId, operation, revision, payloadVersion, payload }) => ({
+            ({
+              eventId,
+              entityType,
+              entityId,
+              operation,
+              revision,
+              payloadVersion,
+              payload,
+              baseRevision,
+              originNodeId,
+              actorId,
+            }) => ({
+              baseRevision,
+              originNodeId,
+              actorId: actorId ?? null,
               eventId,
               entityType,
               entityId,

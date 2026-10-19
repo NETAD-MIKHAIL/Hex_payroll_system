@@ -26,6 +26,7 @@ import {
   usePermission,
 } from './pages/FoundationPages';
 import { UsersPage } from './pages/UsersPage';
+import { ConflictsPage } from './pages/ConflictsPage';
 import type { ReactNode } from 'react';
 function Protected({ permission, children }: { permission: string; children: ReactNode }) {
   const allowed = usePermission(permission);
@@ -48,6 +49,14 @@ function AppRoutes() {
         element={session ? <Navigate to="/dashboard" replace /> : <LoginPage />}
       />
       <Route element={session ? <AppLayout /> : <Navigate to="/login" replace />}>
+        <Route
+          path="/sync/conflicts"
+          element={
+            <Protected permission="sync.conflicts.view">
+              <ConflictsPage />
+            </Protected>
+          }
+        />
         <Route path="/payroll" element={<Navigate to="/payroll/periods" replace />} />
         <Route
           path="/payroll/periods"
@@ -170,8 +179,9 @@ function AppRoutes() {
             </Protected>
           }
         />
+        <Route path="/sync-status" element={<Navigate to="/sync" replace />} />
         <Route
-          path="/sync-status"
+          path="/sync"
           element={
             <Protected permission="sync.view">
               <SyncPage />

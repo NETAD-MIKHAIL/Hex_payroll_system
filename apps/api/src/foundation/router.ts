@@ -23,6 +23,8 @@ import {
 } from '@hexpayroll/shared';
 import { hashPassword } from '../auth/password.js';
 import { syncWorkerStatus, type SyncWorkerStatus } from '../sync/status.js';
+import { captureLocalConflict } from '../sync/local-conflicts.js';
+import { updateFoundationRecord } from './mutations.js';
 import {
   DomainError,
   transaction,
@@ -328,45 +330,9 @@ export function createFoundationRouter(
         .passthrough()
         .parse(req.body);
       const input = domain.schema.parse(body);
-      const row = await transaction(pool, async (client) => {
-        if (domain.table === 'employees') {
-          await lockEmployee(client, who.organizationId!, id, expectedRevision);
-          const old = await client.query('SELECT * FROM employees WHERE id=$1', [id]);
-          if (old.rows[0]?.status !== input.status) requirePermission(who, 'employees.archive');
-          if (!who.permissions.includes('employees.sensitive.update'))
-            for (const key of sensitiveFields) {
-              if (key in input && input[key] != null && input[key] !== normalize(old.rows[0]!)[key])
-                throw new DomainError(403, 'FORBIDDEN', 'Sensitive field permission required');
-              delete input[key];
-            }
-        }
-        const saved = await update(
-          client,
-          domain.table,
-          id,
-          who.organizationId!,
-          expectedRevision,
-          input,
-          who,
-        );
-        await audit(
-          client,
-          who,
-          input.status === 'inactive' || input.status === 'terminated' ? 'ARCHIVE' : 'UPDATE',
-          domain.table,
-          id,
-          Object.keys(input),
-        );
-        await outbox(
-          client,
-          domain.table,
-          domain.table === 'employees'
-            ? await employeeSnapshot(client, id, who.organizationId!)
-            : saved,
-          'UPDATE',
-        );
-        return saved;
-      });
+      const row = await transaction(pool, (client) =>
+        updateFoundationRecord(client, who, domain.table, id, expectedRevision, input),
+      );
       res.json(project(row, who));
     });
   }
@@ -743,10 +709,23 @@ export function createFoundationRouter(
       ).rows[0].count,
       conflicts: (
         await pool.query(
-          "SELECT count(*)::integer count FROM sync_conflicts WHERE organization_id=$1 AND status='open'",
+          "SELECT count(*)::integer count FROM sync_conflicts WHERE organization_id=$1 AND status IN ('open','under_review')",
           [who.organizationId],
         )
       ).rows[0].count,
+      resolvedConflicts: (
+        await pool.query(
+          "SELECT count(*)::integer count FROM sync_conflicts WHERE organization_id=$1 AND status IN ('resolved','dismissed')",
+          [who.organizationId],
+        )
+      ).rows[0].count,
+      lastSyncAttempt:
+        (
+          await pool.query(
+            'SELECT max(last_attempt_at) AS last FROM sync_outbox WHERE organization_id=$1',
+            [who.organizationId],
+          )
+        ).rows[0].last?.toISOString() ?? null,
       pending: 0,
       processing: 0,
       synced: 0,
@@ -769,6 +748,7 @@ export function createFoundationRouter(
       ).rows.map(normalize),
     });
   });
+  router.use(captureLocalConflict(pool));
   router.use(domainErrors);
   return router;
 }

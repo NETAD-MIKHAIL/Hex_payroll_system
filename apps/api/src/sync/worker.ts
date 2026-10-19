@@ -5,6 +5,7 @@ export interface WorkerOperations {
   push(signal: AbortSignal): Promise<unknown>;
   pull(signal: AbortSignal): Promise<unknown>;
   apply(): Promise<void>;
+  finish?(failed: boolean): Promise<void>;
 }
 
 export function startWorker(
@@ -22,13 +23,16 @@ export function startWorker(
   const status = options.status;
   status.state = 'starting';
   const tick = () => {
-    if (stopped || running) return;
+    if (stopped || running) return running ?? Promise.resolve();
+    if (status.authorization === 'denied') return Promise.resolve();
     status.state = 'running';
     running = (async () => {
+      let failed = false;
       try {
         await operations.prepare();
       } catch {
         if (!stopped) options.onError();
+        await operations.finish?.(true);
         return;
       }
       const workItems = [
@@ -37,18 +41,26 @@ export function startWorker(
         () => operations.apply(),
       ];
       for (const work of workItems) {
-        if (stopped) break;
+        if (stopped || status.authorization === 'denied') break;
         try {
           await work();
         } catch {
+          failed = true;
           if (!stopped) options.onError();
         }
       }
-    })().finally(() => {
-      running = null;
-      if (!stopped && status.state !== 'blocked') status.state = 'idle';
-    });
+      await operations.finish?.(failed);
+    })()
+      .catch(() => {
+        if (!stopped) options.onError();
+      })
+      .finally(() => {
+        running = null;
+        if (!stopped && status.state !== 'blocked') status.state = 'idle';
+      });
+    return running;
   };
+  status.requestCycle = () => tick();
   const cancelSchedule = (
     options.schedule ??
     ((callback, interval) => {
@@ -64,6 +76,7 @@ export function startWorker(
       return;
     }
     stopped = true;
+    status.requestCycle = null;
     status.state = 'stopping';
     cancelSchedule();
     controller.abort(new Error('Synchronization worker stopping'));

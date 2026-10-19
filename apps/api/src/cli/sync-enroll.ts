@@ -5,6 +5,7 @@ import { syncRegistrationResponseSchema, syncRegistrationSchema } from '@hexpayr
 import { pool } from '../db/pool.js';
 import { transaction } from '../foundation/repository.js';
 import { tokenHash } from '../auth/service.js';
+import { windowsCredentials } from '../sync/credentials.js';
 import { selectLocalOrigin } from '../sync/outbox.js';
 
 class EnrollmentError extends Error {}
@@ -48,6 +49,7 @@ try {
     throw new EnrollmentError(
       'Central and local organization IDs differ; registration must be revoked centrally',
     );
+  await windowsCredentials.write(node.nodeId, node.token);
   await transaction(pool, async (c) => {
     await c.query(
       'INSERT INTO sync_nodes(id,organization_id,device_name,token_hash) VALUES($1,$2,$3,$4)',
@@ -64,13 +66,7 @@ try {
           line,
         ),
     );
-  lines.push(
-    'SYNC_MODE=local',
-    `SYNC_CENTRAL_URL=${url}`,
-    `SYNC_NODE_ID=${node.nodeId}`,
-    `SYNC_NODE_TOKEN=${node.token}`,
-    '',
-  );
+  lines.push('SYNC_MODE=local', `SYNC_CENTRAL_URL=${url}`, `SYNC_NODE_ID=${node.nodeId}`, '');
   await writeFile('.env', lines.join('\n'), { mode: 0o600 });
   console.log('Installation enrolled. Restart the local API to enable transport.');
 } catch (error) {

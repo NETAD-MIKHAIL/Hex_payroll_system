@@ -50,7 +50,7 @@ const envSchema = z
         message: 'Lease must exceed request timeout',
       });
     if (value.SYNC_MODE !== 'local') return;
-    for (const key of ['SYNC_CENTRAL_URL', 'SYNC_NODE_ID', 'SYNC_NODE_TOKEN'] as const)
+    for (const key of ['SYNC_CENTRAL_URL', 'SYNC_NODE_ID'] as const)
       if (!value[key])
         ctx.addIssue({ code: 'custom', path: [key], message: 'Required for local sync' });
     if (value.SYNC_CENTRAL_URL) {
@@ -60,6 +60,7 @@ const envSchema = z
         u.password ||
         u.search ||
         u.hash ||
+        (value.NODE_ENV === 'production' && u.protocol !== 'https:') ||
         (u.protocol !== 'https:' &&
           !(u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)))
       )

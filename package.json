@@ -17,7 +17,9 @@
     "typecheck": "pnpm --filter @hexpayroll/shared build && pnpm --filter @hexpayroll/payroll-engine build && pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test": "pnpm -r --if-present test",
+    "test:integration": "pnpm --filter @hexpayroll/api test:integration"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

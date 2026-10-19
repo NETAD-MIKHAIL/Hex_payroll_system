@@ -20,6 +20,7 @@ import {
 } from '@hexpayroll/shared';
 import { requirePermission, normalize, type Actor } from '../foundation/repository.js';
 import { authenticate, domainErrors } from './middleware.js';
+import { captureLocalConflict } from '../sync/local-conflicts.js';
 import {
   organization,
   find,
@@ -298,6 +299,7 @@ export function createTimekeepingRouter(pool: Pool) {
         ),
       ),
   );
+  router.use(captureLocalConflict(pool));
   router.use(domainErrors);
   return router;
 }

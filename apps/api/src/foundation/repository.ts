@@ -114,6 +114,7 @@ export async function audit(
   entityType: string,
   entityId: string | null,
   fields: string[] = [],
+  metadata: Record<string, unknown> = {},
 ) {
   await client.query(
     'INSERT INTO audit_events(organization_id,user_id,action,entity_type,entity_id,description,metadata) VALUES($1,$2,$3,$4,$5,$6,$7)',
@@ -124,11 +125,11 @@ export async function audit(
       entityType,
       entityId,
       `${action} ${entityType}`,
-      JSON.stringify({ changedFields: fields }),
+      JSON.stringify({ ...metadata, changedFields: fields }),
     ],
   );
 }
-const payloadFields: Record<string, readonly string[]> = {
+export const payloadFields: Record<string, readonly string[]> = {
   work_schedules: ['code', 'name', 'description', 'status'],
   work_schedule_versions: [
     'scheduleId',
@@ -299,6 +300,12 @@ export async function outbox(
     operation,
     revision: Number(row.revision),
     payload,
+    actorId:
+      typeof row.updatedBy === 'string'
+        ? row.updatedBy
+        : typeof row.createdBy === 'string'
+          ? row.createdBy
+          : null,
   });
 }
 const snake = (key: string) => key.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());

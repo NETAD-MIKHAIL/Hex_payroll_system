@@ -24,8 +24,8 @@ export async function databaseFixture(
   const runtimeName = decodeURIComponent(runtimeDb.pathname.slice(1));
 
   if (
-    migrationName !== 'hexpayroll_test' ||
-    runtimeName !== 'hexpayroll_test' ||
+    !/^(hexpayroll_test|hexpayroll_sync_test_[a-f0-9]{16}_(central|a|b))$/.test(migrationName) ||
+    runtimeName !== migrationName ||
     migrationDb.hostname !== runtimeDb.hostname ||
     migrationDb.port !== runtimeDb.port
   ) {

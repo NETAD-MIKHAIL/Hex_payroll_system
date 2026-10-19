@@ -3,6 +3,8 @@ import { createApp, logger } from './app.js';
 import { env } from './config/env.js';
 import { pool, probeDatabase } from './db/pool.js';
 import { startAttendanceWorker } from './timekeeping/worker.js';
+import { windowsCredentials } from './sync/credentials.js';
+import { syncWorkerStatus } from './sync/status.js';
 import { startSyncWorker } from './sync/client.js';
 import { startLocalAttendanceWorker } from './sync/worker-mode.js';
 
@@ -13,11 +15,23 @@ async function main(): Promise<void> {
   logger.info({ database: probe.database, connectedAs: probe.user }, 'postgres reachable');
 
   const app = createApp();
+  let credential: string | undefined;
+  if (env.SYNC_MODE === 'local') {
+    try {
+      credential = await windowsCredentials.read(env.SYNC_NODE_ID!);
+    } catch {
+      syncWorkerStatus.failAuthorization('CREDENTIAL_UNAVAILABLE');
+      syncWorkerStatus.organizationId =
+        (await pool.query('SELECT organization_id FROM sync_nodes WHERE id=$1', [env.SYNC_NODE_ID]))
+          .rows[0]?.organization_id ?? null;
+      logger.warn('Secure device credential unavailable; local operations remain available');
+    }
+  }
   const stopSync =
-    env.SYNC_MODE === 'local'
+    env.SYNC_MODE === 'local' && credential
       ? startSyncWorker(
           pool,
-          { url: env.SYNC_CENTRAL_URL!, nodeId: env.SYNC_NODE_ID!, token: env.SYNC_NODE_TOKEN! },
+          { url: env.SYNC_CENTRAL_URL!, nodeId: env.SYNC_NODE_ID!, token: credential },
           env.SYNC_INTERVAL_MS,
           () => logger.warn('Synchronization unavailable; local operations continue'),
           {

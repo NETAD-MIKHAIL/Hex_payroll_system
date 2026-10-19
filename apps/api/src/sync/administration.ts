@@ -1,7 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { z } from 'zod';
 import { syncRegistrationSchema, syncRegistrationResponseSchema } from '@hexpayroll/shared';
-import { transaction } from '../foundation/repository.js';
+import { transaction, audit } from '../foundation/repository.js';
 import { registerNode } from './service.js';
 
 export const nodeCredentialSchema = syncRegistrationResponseSchema.extend({
@@ -23,6 +23,13 @@ export async function enrollCentralNode(database: Pool, input: unknown) {
   return transaction(database, async (client) => {
     await requireCentralOrganization(client, parsed.organizationId);
     const result = await registerNode(client, parsed.organizationId, parsed.deviceName);
+    await audit(
+      client,
+      { id: null, organizationId: parsed.organizationId },
+      'DEVICE_REGISTERED',
+      'sync_nodes',
+      result.nodeId,
+    );
     return nodeCredentialSchema.parse({ ...result, deviceName: parsed.deviceName });
   });
 }
@@ -37,6 +44,7 @@ export async function revokeCentralNode(database: Pool, organizationId: string, 
       [nodeId, organizationId],
     );
     if (!result.rowCount) throw new Error('Node is not enrolled in the canonical organization');
+    await audit(client, { id: null, organizationId }, 'DEVICE_REVOKED', 'sync_nodes', nodeId);
     return { nodeId, revoked: true };
   });
 }

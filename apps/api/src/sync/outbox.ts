@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { dependencyKeys } from './conflict-policy.js';
 
 /** Changes future publication only; event origins already stored are retained. */
 export async function selectLocalOrigin(
@@ -25,11 +26,14 @@ export async function enqueueOutbox(
     revision: number;
     baseRevision?: number;
     payload: unknown;
+    actorId?: string | null;
   },
 ) {
+  const context = await client.query("SELECT current_setting('hex.sync_remote',true) AS remote");
+  if (context.rows[0]?.remote === 'on') return;
   await client.query(
-    `INSERT INTO sync_outbox(organization_id,entity_type,entity_id,operation,revision,base_revision,payload)
-     VALUES($1,$2,$3,$4,$5,$6,$7)`,
+    `INSERT INTO sync_outbox(organization_id,entity_type,entity_id,operation,revision,base_revision,payload,actor_id,dependency_keys)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [
       event.organizationId,
       event.entityType,
@@ -38,6 +42,8 @@ export async function enqueueOutbox(
       event.revision,
       event.baseRevision ?? (event.operation === 'CREATE' ? 0 : event.revision - 1),
       JSON.stringify(event.payload),
+      event.actorId ?? null,
+      dependencyKeys(event.entityType, event.entityId, event.payload as Record<string, unknown>),
     ],
   );
 }

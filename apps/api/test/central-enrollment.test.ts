@@ -51,6 +51,8 @@ test('credential environment import keeps transport disabled and validates the e
   assert.equal((result.match(/SYNC_MODE=/g) ?? []).length, 1);
   assert.ok(result.includes('SYNC_MODE=disabled'));
   assert.ok(!result.includes('SYNC_ADMIN_TOKEN'));
+  assert.ok(!result.includes('SYNC_NODE_TOKEN'));
+  assert.ok(!result.includes(credential.token));
   for (const url of [
     'http://central.example.com',
     'https://user:secret@central.example.com',
@@ -141,30 +143,18 @@ test(
       );
       await importLocalNode(pc1.runtime, first);
       await importLocalNode(pc1.runtime, first); // Retry after environment-file delivery failure.
-      await assert.rejects(
-        importLocalNode(pc1.runtime, { ...first, token: 'a'.repeat(43) }),
-        /differs/,
-      );
+      await importLocalNode(pc1.runtime, { ...first, token: 'a'.repeat(43) });
+      await importLocalNode(pc1.runtime, first); // Secure import supports credential rotation.
       await assert.rejects(importLocalNode(pc1.runtime, second), /active node/);
       await importLocalNode(pc2.runtime, second);
       assert.equal(
         (await pc1.runtime.query('SELECT count(*)::int AS count FROM sync_nodes')).rows[0].count,
         1,
       );
-      // Prove central transport works with no auth/business table privileges.
-      const schema = (await central.migrator.query('SELECT current_schema() AS name')).rows[0].name;
-      assert.match(schema, /^hexpayroll_phase1_test_[a-f0-9]+$/);
-      await central.migrator.query(
-        `REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM hexpayroll_app`,
-      );
-      await central.migrator.query(
-        'GRANT SELECT,INSERT,UPDATE ON sync_nodes,sync_outbox,sync_inbox,sync_conflicts TO hexpayroll_app',
-      );
-      await central.migrator.query('GRANT SELECT,INSERT ON sync_changes TO hexpayroll_app');
-      await central.migrator.query(
-        'GRANT USAGE,SELECT ON SEQUENCE sync_changes_sequence_seq TO hexpayroll_app',
-      );
-      await assert.rejects(central.runtime.query('SELECT * FROM auth_users'), { code: '42501' });
+      // Central application requires domain DML while DDL remains forbidden.
+      await assert.rejects(central.runtime.query('CREATE TABLE forbidden_sync_ddl(id integer)'), {
+        code: '42501',
+      });
       const app = express();
       app.use(express.json());
       app.use('/api', createSyncRouter(central.runtime, true));
@@ -173,10 +163,22 @@ test(
       const address = server.address();
       assert.ok(address && typeof address !== 'string');
       const url = `http://127.0.0.1:${address.port}`;
-      const eventId = randomUUID();
+      const eventId = randomUUID(),
+        entityId = randomUUID();
       await pc1.runtime.query(
         "INSERT INTO sync_outbox(id,organization_id,entity_type,entity_id,operation,revision,payload) VALUES($1,$2,'departments',$3,'CREATE',1,$4)",
-        [eventId, organizationId, randomUUID(), JSON.stringify({ code: 'FIN', name: 'Finance' })],
+        [
+          eventId,
+          organizationId,
+          entityId,
+          JSON.stringify({
+            id: entityId,
+            organizationId,
+            revision: 1,
+            code: 'FIN',
+            name: 'Finance',
+          }),
+        ],
       );
       assert.equal(await pushNextBatch(pc1.runtime, { url, ...first }), true);
       assert.equal(await pullNextBatch(pc2.runtime, { url, ...second }), true);
@@ -191,10 +193,10 @@ test(
         ])
       ).rows[0];
       assert.ok(inbox);
-      assert.equal(inbox.applied_at, null);
+      assert.ok(inbox.applied_at);
       assert.equal(
         (await pc2.runtime.query('SELECT count(*)::int AS count FROM departments')).rows[0].count,
-        0,
+        1,
       );
       await assert.rejects(
         revokeCentralNode(adminDatabase, randomUUID(), first.nodeId),
@@ -207,9 +209,9 @@ test(
       await revokeCentralNode(adminDatabase, organizationId, first.nodeId);
       await revokeCentralNode(adminDatabase, organizationId, first.nodeId); // Idempotent revocation.
       const response = await fetch(url + '/api/sync/pull?after=0', {
-        headers: { Authorization: `Bearer ${first.token}` },
+        headers: { Authorization: `Bearer ${first.token}`, 'X-Hex-Sync-Protocol': '2' },
       });
-      assert.equal(response.status, 401);
+      assert.equal(response.status, 403);
     } finally {
       if (server) {
         server.closeAllConnections();

@@ -218,8 +218,8 @@ export const biometricDevices = pgTable("biometric_devices", {
 			foreignColumns: [authUsers.id],
 			name: "biometric_devices_updated_by_fkey"
 		}),
-	unique("biometric_devices_organization_id_code_key").on(table.code, table.organizationId),
 	unique("biometric_devices_organization_id_id_key").on(table.id, table.organizationId),
+	unique("biometric_devices_organization_id_code_key").on(table.code, table.organizationId),
 	check("biometric_devices_names_check", sql`(length(btrim(code)) > 0) AND (length(btrim(name)) > 0)`),
 	check("biometric_devices_revision_check", sql`revision > 0`),
 	check("biometric_devices_status_check", sql`status = ANY (ARRAY['active'::text, 'inactive'::text])`),
@@ -252,7 +252,7 @@ export const employees = pgTable("employees", {
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
 	uniqueIndex("employees_number_unique").using("btree", sql`organization_id`, sql`lower(employee_number)`),
-	index("employees_search_idx").using("btree", table.organizationId.asc().nullsLast().op("text_ops"), table.status.asc().nullsLast().op("text_ops"), table.lastName.asc().nullsLast().op("uuid_ops")),
+	index("employees_search_idx").using("btree", table.organizationId.asc().nullsLast().op("text_ops"), table.status.asc().nullsLast().op("text_ops"), table.lastName.asc().nullsLast().op("text_ops")),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
@@ -292,7 +292,7 @@ export const employmentVersions = pgTable("employment_versions", {
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedBy: uuid("updated_by"),
 }, (table): PgTableExtraConfigValue[] => [
-	index("employment_employee_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.employeeId.asc().nullsLast().op("date_ops"), table.effectiveFrom.asc().nullsLast().op("date_ops")),
+	index("employment_employee_idx").using("btree", table.organizationId.asc().nullsLast().op("date_ops"), table.employeeId.asc().nullsLast().op("uuid_ops"), table.effectiveFrom.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.organizationId, table.departmentId],
 			foreignColumns: [departments.organizationId, departments.id],
@@ -390,7 +390,7 @@ export const auditEvents = pgTable("audit_events", {
 			foreignColumns: [authUsers.id],
 			name: "audit_events_user_id_fkey"
 		}),
-	check("audit_events_action_check", sql`action = ANY (ARRAY['CREATE'::text, 'UPDATE'::text, 'ARCHIVE'::text, 'ACTIVATE'::text, 'DEACTIVATE'::text, 'LOGIN'::text, 'LOGOUT'::text, 'CONFIG_CHANGE'::text, 'ROLE_CHANGE'::text])`),
+	check("audit_events_action_check", sql`action = ANY (ARRAY['CREATE'::text, 'UPDATE'::text, 'ARCHIVE'::text, 'ACTIVATE'::text, 'DEACTIVATE'::text, 'LOGIN'::text, 'LOGOUT'::text, 'CONFIG_CHANGE'::text, 'ROLE_CHANGE'::text, 'CONFLICT_DETECTED'::text, 'CONFLICT_REVIEWED'::text, 'CONFLICT_RESOLVED'::text, 'CONFLICT_REJECTED'::text, 'CONFLICT_ESCALATED'::text, 'SYNC_APPLIED'::text, 'DEVICE_REGISTERED'::text, 'DEVICE_REVOKED'::text, 'DEVICE_ROTATED'::text, 'DEVICE_AUTHORIZED'::text])`),
 	check("audit_events_metadata_check", sql`jsonb_typeof(metadata) = 'object'::text`),
 ]);
 
@@ -462,7 +462,7 @@ export const employeeScheduleAssignments = pgTable("employee_schedule_assignment
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
-	index("schedule_assignment_dates_idx").using("btree", table.organizationId.asc().nullsLast().op("date_ops"), table.employeeId.asc().nullsLast().op("uuid_ops"), table.effectiveFrom.asc().nullsLast().op("date_ops")),
+	index("schedule_assignment_dates_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.employeeId.asc().nullsLast().op("date_ops"), table.effectiveFrom.asc().nullsLast().op("date_ops")),
 	foreignKey({
 			columns: [table.organizationId, table.employeeId],
 			foreignColumns: [employees.organizationId, employees.id],
@@ -595,8 +595,8 @@ export const workScheduleVersions = pgTable("work_schedule_versions", {
 			foreignColumns: [workSchedules.organizationId, workSchedules.id],
 			name: "work_schedule_versions_organization_id_schedule_id_fkey"
 		}),
-	unique("work_schedule_versions_organization_id_id_key").on(table.id, table.organizationId),
 	unique("work_schedule_versions_schedule_id_effective_from_key").on(table.effectiveFrom, table.scheduleId),
+	unique("work_schedule_versions_organization_id_id_key").on(table.id, table.organizationId),
 	check("work_schedule_versions_code_check", sql`length(btrim(code)) > 0`),
 	check("work_schedule_versions_name_check", sql`length(btrim(name)) > 0`),
 	check("work_schedule_versions_revision_check", sql`revision = 1`),
@@ -627,8 +627,8 @@ export const leaveRequests = pgTable("leave_requests", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
-	index("leave_employee_dates_idx").using("btree", table.organizationId.asc().nullsLast().op("date_ops"), table.employeeId.asc().nullsLast().op("date_ops"), table.startDate.asc().nullsLast().op("uuid_ops"), table.endDate.asc().nullsLast().op("date_ops")),
-	index("leave_pending_idx").using("btree", table.organizationId.asc().nullsLast().op("text_ops"), table.status.asc().nullsLast().op("text_ops"), table.startDate.asc().nullsLast().op("uuid_ops")),
+	index("leave_employee_dates_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.employeeId.asc().nullsLast().op("uuid_ops"), table.startDate.asc().nullsLast().op("date_ops"), table.endDate.asc().nullsLast().op("uuid_ops")),
+	index("leave_pending_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.status.asc().nullsLast().op("date_ops"), table.startDate.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.approvedBy],
 			foreignColumns: [authUsers.id],
@@ -693,9 +693,9 @@ export const timeRecords = pgTable("time_records", {
 	revision: integer().default(1).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
-	index("time_records_employee_date_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.employeeId.asc().nullsLast().op("timestamptz_ops"), table.recordedAt.asc().nullsLast().op("uuid_ops")),
-	uniqueIndex("time_records_external_unique").using("btree", table.deviceId.asc().nullsLast().op("text_ops"), table.externalRecordId.asc().nullsLast().op("text_ops")).where(sql`(external_record_id IS NOT NULL)`),
-	uniqueIndex("time_records_fallback_unique").using("btree", table.deviceId.asc().nullsLast().op("uuid_ops"), table.deviceEmployeeId.asc().nullsLast().op("text_ops"), table.recordedAt.asc().nullsLast().op("timestamptz_ops"), table.recordType.asc().nullsLast().op("uuid_ops")).where(sql`((external_record_id IS NULL) AND (device_id IS NOT NULL))`),
+	index("time_records_employee_date_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.employeeId.asc().nullsLast().op("uuid_ops"), table.recordedAt.asc().nullsLast().op("timestamptz_ops")),
+	uniqueIndex("time_records_external_unique").using("btree", table.deviceId.asc().nullsLast().op("uuid_ops"), table.externalRecordId.asc().nullsLast().op("uuid_ops")).where(sql`(external_record_id IS NOT NULL)`),
+	uniqueIndex("time_records_fallback_unique").using("btree", table.deviceId.asc().nullsLast().op("uuid_ops"), table.deviceEmployeeId.asc().nullsLast().op("uuid_ops"), table.recordedAt.asc().nullsLast().op("text_ops"), table.recordType.asc().nullsLast().op("uuid_ops")).where(sql`((external_record_id IS NULL) AND (device_id IS NOT NULL))`),
 	foreignKey({
 			columns: [table.createdBy],
 			foreignColumns: [authUsers.id],
@@ -748,7 +748,7 @@ export const attendanceRecords = pgTable("attendance_records", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
-	index("attendance_date_idx").using("btree", table.organizationId.asc().nullsLast().op("date_ops"), table.workDate.asc().nullsLast().op("text_ops"), table.attendanceStatus.asc().nullsLast().op("text_ops")),
+	index("attendance_date_idx").using("btree", table.organizationId.asc().nullsLast().op("date_ops"), table.workDate.asc().nullsLast().op("uuid_ops"), table.attendanceStatus.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.approvedBy],
 			foreignColumns: [authUsers.id],
@@ -834,7 +834,7 @@ export const payrollPeriods = pgTable("payroll_periods", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
-	index("payroll_periods_list_idx").using("btree", table.organizationId.asc().nullsLast().op("text_ops"), table.periodStart.desc().nullsFirst().op("text_ops"), table.payFrequency.asc().nullsLast().op("text_ops")),
+	index("payroll_periods_list_idx").using("btree", table.organizationId.asc().nullsLast().op("date_ops"), table.periodStart.desc().nullsFirst().op("uuid_ops"), table.payFrequency.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.createdBy],
 			foreignColumns: [authUsers.id],
@@ -870,8 +870,8 @@ export const payrollPeriods = pgTable("payroll_periods", {
 			foreignColumns: [authUsers.id],
 			name: "payroll_periods_reviewed_by_fkey"
 		}),
-	unique("payroll_periods_organization_id_code_key").on(table.code, table.organizationId),
 	unique("payroll_periods_organization_id_id_key").on(table.id, table.organizationId),
+	unique("payroll_periods_organization_id_code_key").on(table.code, table.organizationId),
 	check("payroll_periods_check", sql`period_end >= period_start`),
 	check("payroll_periods_pay_frequency_check", sql`pay_frequency = ANY (ARRAY['monthly'::text, 'semi_monthly'::text, 'weekly'::text, 'biweekly'::text])`),
 	check("payroll_periods_revision_check", sql`revision > 0`),
@@ -1178,7 +1178,7 @@ export const payrollEntries = pgTable("payroll_entries", {
 	revision: integer().default(1).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
-	index("payroll_entries_lookup_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.employeeId.asc().nullsLast().op("uuid_ops"), table.periodId.asc().nullsLast().op("date_ops"), table.startDate.asc().nullsLast().op("date_ops")).where(sql`active`),
+	index("payroll_entries_lookup_idx").using("btree", table.organizationId.asc().nullsLast().op("date_ops"), table.employeeId.asc().nullsLast().op("uuid_ops"), table.periodId.asc().nullsLast().op("uuid_ops"), table.startDate.asc().nullsLast().op("uuid_ops")).where(sql`active`),
 	foreignKey({
 			columns: [table.createdBy],
 			foreignColumns: [authUsers.id],
@@ -1250,70 +1250,6 @@ export const payrollContributionLines = pgTable("payroll_contribution_lines", {
 	check("payroll_contribution_lines_type_check", sql`type = ANY (ARRAY['sss'::text, 'philhealth'::text, 'pagibig'::text])`),
 ]);
 
-export const syncNodes = pgTable("sync_nodes", {
-	id: uuid().default(sql`uuidv7()`).primaryKey().notNull(),
-	organizationId: uuid("organization_id").notNull(),
-	deviceName: text("device_name").notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-	lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: 'string' }),
-	tokenHash: char("token_hash", { length: 64 }),
-	enabled: boolean().default(true).notNull(),
-	revokedAt: timestamp("revoked_at", { withTimezone: true, mode: 'string' }),
-	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
-	lastPullSequence: bigint("last_pull_sequence", { mode: "bigint" }).default(0n).notNull(),
-}, (table): PgTableExtraConfigValue[] => [
-	uniqueIndex("sync_nodes_token_hash_idx").using("btree", table.tokenHash.asc().nullsLast().op("bpchar_ops")).where(sql`(token_hash IS NOT NULL)`),
-	foreignKey({
-			columns: [table.organizationId],
-			foreignColumns: [organizations.id],
-			name: "sync_nodes_organization_id_fkey"
-		}),
-	unique("sync_nodes_organization_identity").on(table.id, table.organizationId),
-	check("sync_nodes_name_check", sql`length(btrim(device_name)) > 0`),
-	check("sync_nodes_pull_sequence_check", sql`last_pull_sequence >= 0`),
-	check("sync_nodes_revocation_check", sql`(enabled AND (revoked_at IS NULL)) OR (NOT enabled)`),
-	check("sync_nodes_token_hash_check", sql`(token_hash IS NULL) OR (token_hash ~ '^[a-f0-9]{64}$'::text)`),
-]);
-
-export const syncChanges = pgTable("sync_changes", {
-	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
-	sequence: bigint({ mode: "bigint" }).primaryKey().generatedAlwaysAsIdentity({ name: "sync_changes_sequence_seq", startWith: 1, increment: 1, minValue: 1, maxValue: "9223372036854775807", cache: 1 }),
-	id: uuid().default(sql`uuidv7()`).notNull(),
-	organizationId: uuid("organization_id").notNull(),
-	sourceNodeId: uuid("source_node_id").notNull(),
-	sourceEventId: uuid("source_event_id").notNull(),
-	entityType: text("entity_type").notNull(),
-	entityId: uuid("entity_id").notNull(),
-	operation: text().notNull(),
-	revision: integer().notNull(),
-	payloadVersion: integer("payload_version").default(1).notNull(),
-	payload: jsonb().notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
-}, (table): PgTableExtraConfigValue[] => [
-	index("sync_changes_pull_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.sequence.asc().nullsLast().op("int8_ops")),
-	foreignKey({
-			columns: [table.organizationId, table.sourceNodeId],
-			foreignColumns: [syncNodes.organizationId, syncNodes.id],
-			name: "sync_changes_node_scope"
-		}),
-	foreignKey({
-			columns: [table.organizationId],
-			foreignColumns: [organizations.id],
-			name: "sync_changes_organization_id_fkey"
-		}),
-	foreignKey({
-			columns: [table.sourceNodeId],
-			foreignColumns: [syncNodes.id],
-			name: "sync_changes_source_node_id_fkey"
-		}),
-	unique("sync_changes_id_key").on(table.id),
-	unique("sync_changes_source_node_id_source_event_id_key").on(table.sourceEventId, table.sourceNodeId),
-	check("sync_changes_operation_check", sql`operation = ANY (ARRAY['CREATE'::text, 'UPDATE'::text, 'ARCHIVE'::text])`),
-	check("sync_changes_payload_check", sql`(jsonb_typeof(payload) = 'object'::text) AND (octet_length((payload)::text) <= 262144)`),
-	check("sync_changes_payload_version_check", sql`payload_version > 0`),
-	check("sync_changes_revision_check", sql`revision > 0`),
-]);
-
 export const payrollPolicies = pgTable("payroll_policies", {
 	id: uuid().default(sql`uuidv7()`).primaryKey().notNull(),
 	organizationId: uuid("organization_id").notNull(),
@@ -1325,7 +1261,7 @@ export const payrollPolicies = pgTable("payroll_policies", {
 	revision: integer().default(1).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
-	index("payroll_policy_effectivity_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.effectiveFrom.asc().nullsLast().op("date_ops")),
+	index("payroll_policy_effectivity_idx").using("btree", table.organizationId.asc().nullsLast().op("date_ops"), table.effectiveFrom.asc().nullsLast().op("date_ops")),
 	foreignKey({
 			columns: [table.createdBy],
 			foreignColumns: [authUsers.id],
@@ -1362,7 +1298,7 @@ export const statutoryRuleSets = pgTable("statutory_rule_sets", {
 	revision: integer().default(1).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
-	index("statutory_effectivity_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.type.asc().nullsLast().op("date_ops"), table.effectiveFrom.asc().nullsLast().op("uuid_ops")).where(sql`(status = 'active'::text)`),
+	index("statutory_effectivity_idx").using("btree", table.organizationId.asc().nullsLast().op("date_ops"), table.type.asc().nullsLast().op("uuid_ops"), table.effectiveFrom.asc().nullsLast().op("uuid_ops")).where(sql`(status = 'active'::text)`),
 	foreignKey({
 			columns: [table.importedBy],
 			foreignColumns: [authUsers.id],
@@ -1412,6 +1348,33 @@ export const payrollDeductionLines = pgTable("payroll_deduction_lines", {
 	check("payroll_earning_lines_amount_check", sql`(amount >= 0) AND (amount <= '9007199254740991'::bigint)`),
 ]);
 
+export const syncNodes = pgTable("sync_nodes", {
+	id: uuid().default(sql`uuidv7()`).primaryKey().notNull(),
+	organizationId: uuid("organization_id").notNull(),
+	deviceName: text("device_name").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: 'string' }),
+	tokenHash: char("token_hash", { length: 64 }),
+	enabled: boolean().default(true).notNull(),
+	revokedAt: timestamp("revoked_at", { withTimezone: true, mode: 'string' }),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	lastPullSequence: bigint("last_pull_sequence", { mode: "bigint" }).default(0n).notNull(),
+	allowedDomains: text("allowed_domains").array().default([""]).notNull(),
+	credentialRotatedAt: timestamp("credential_rotated_at", { withTimezone: true, mode: 'string' }),
+}, (table): PgTableExtraConfigValue[] => [
+	uniqueIndex("sync_nodes_token_hash_idx").using("btree", table.tokenHash.asc().nullsLast().op("bpchar_ops")).where(sql`(token_hash IS NOT NULL)`),
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organizations.id],
+			name: "sync_nodes_organization_id_fkey"
+		}),
+	unique("sync_nodes_organization_identity").on(table.id, table.organizationId),
+	check("sync_nodes_name_check", sql`length(btrim(device_name)) > 0`),
+	check("sync_nodes_pull_sequence_check", sql`last_pull_sequence >= 0`),
+	check("sync_nodes_revocation_check", sql`(enabled AND (revoked_at IS NULL)) OR (NOT enabled)`),
+	check("sync_nodes_token_hash_check", sql`(token_hash IS NULL) OR (token_hash ~ '^[a-f0-9]{64}$'::text)`),
+]);
+
 export const syncConflicts = pgTable("sync_conflicts", {
 	id: uuid().default(sql`uuidv7()`).primaryKey().notNull(),
 	organizationId: uuid("organization_id").notNull(),
@@ -1428,8 +1391,17 @@ export const syncConflicts = pgTable("sync_conflicts", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	resolvedAt: timestamp("resolved_at", { withTimezone: true, mode: 'string' }),
 	resolvedBy: uuid("resolved_by"),
+	conflictType: text("conflict_type").default('EVENT_IDENTITY').notNull(),
+	baseRevision: integer("base_revision"),
+	localEventId: uuid("local_event_id"),
+	version: integer().default(1).notNull(),
+	authority: text().default('remote').notNull(),
+	resolutionState: text("resolution_state").default('none').notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table): PgTableExtraConfigValue[] => [
-	index("sync_conflicts_open_idx").using("btree", table.organizationId.asc().nullsLast().op("text_ops"), table.status.asc().nullsLast().op("text_ops"), table.createdAt.asc().nullsLast().op("uuid_ops")),
+	uniqueIndex("sync_conflict_event_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.localEventId.asc().nullsLast().op("uuid_ops")).where(sql`(local_event_id IS NOT NULL)`),
+	index("sync_conflict_filters_idx").using("btree", table.organizationId.asc().nullsLast().op("timestamptz_ops"), table.status.asc().nullsLast().op("uuid_ops"), table.conflictType.asc().nullsLast().op("text_ops"), table.createdAt.desc().nullsFirst().op("uuid_ops"), table.id.asc().nullsLast().op("timestamptz_ops")),
+	index("sync_conflicts_open_idx").using("btree", table.organizationId.asc().nullsLast().op("timestamptz_ops"), table.status.asc().nullsLast().op("text_ops"), table.createdAt.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.nodeId],
 			foreignColumns: [syncNodes.id],
@@ -1446,23 +1418,42 @@ export const syncConflicts = pgTable("sync_conflicts", {
 			name: "sync_conflicts_organization_id_fkey"
 		}),
 	foreignKey({
+			columns: [table.organizationId, table.localEventId],
+			foreignColumns: [syncOutbox.organizationId, syncOutbox.id],
+			name: "sync_conflicts_organization_id_local_event_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.organizationId, table.nodeId],
+			foreignColumns: [syncNodes.organizationId, syncNodes.id],
+			name: "sync_conflicts_organization_id_node_id_fkey"
+		}),
+	foreignKey({
 			columns: [table.resolvedBy],
 			foreignColumns: [authUsers.id],
 			name: "sync_conflicts_resolved_by_fkey"
 		}),
 	unique("sync_conflicts_node_id_source_event_id_key").on(table.nodeId, table.sourceEventId),
-	check("sync_conflicts_check", sql`((status = 'open'::text) AND (resolved_at IS NULL) AND (resolved_by IS NULL)) OR ((status = ANY (ARRAY['resolved'::text, 'ignored'::text])) AND (resolved_at IS NOT NULL))`),
+	unique("sync_conflicts_org_id_unique").on(table.id, table.organizationId),
+	check("sync_conflicts_authority_check", sql`authority = ANY (ARRAY['local'::text, 'remote'::text])`),
+	check("sync_conflicts_base_revision_check", sql`base_revision >= 0`),
+	check("sync_conflicts_closed_check", sql`((status = ANY (ARRAY['open'::text, 'under_review'::text])) AND (resolved_at IS NULL) AND (resolved_by IS NULL)) OR ((status = ANY (ARRAY['resolved'::text, 'dismissed'::text])) AND (resolved_at IS NOT NULL))`),
+	check("sync_conflicts_conflict_type_check", sql`conflict_type = ANY (ARRAY['UPDATE_UPDATE'::text, 'UPDATE_ARCHIVE'::text, 'DUPLICATE_CREATE'::text, 'STALE_REVISION'::text, 'MISSING_DEPENDENCY'::text, 'INVALID_REFERENCE'::text, 'LEAVE_CONFLICT'::text, 'SCHEDULE_CONFLICT'::text, 'PAYROLL_CONFLICT'::text, 'AUTHORIZATION_CONFLICT'::text, 'EVENT_IDENTITY'::text])`),
 	check("sync_conflicts_current_payload_check", sql`(current_payload IS NULL) OR (jsonb_typeof(current_payload) = 'object'::text)`),
 	check("sync_conflicts_current_revision_check", sql`(current_revision IS NULL) OR (current_revision > 0)`),
+	check("sync_conflicts_current_size", sql`(current_payload IS NULL) OR (octet_length((current_payload)::text) <= 262144)`),
 	check("sync_conflicts_incoming_payload_check", sql`jsonb_typeof(incoming_payload) = 'object'::text`),
 	check("sync_conflicts_incoming_revision_check", sql`incoming_revision > 0`),
+	check("sync_conflicts_incoming_size", sql`octet_length((incoming_payload)::text) <= 262144`),
 	check("sync_conflicts_reason_check", sql`length(btrim(reason)) > 0`),
-	check("sync_conflicts_status_check", sql`status = ANY (ARRAY['open'::text, 'resolved'::text, 'ignored'::text])`),
+	check("sync_conflicts_resolution_state_check", sql`resolution_state = ANY (ARRAY['none'::text, 'pending'::text, 'confirmed'::text])`),
+	check("sync_conflicts_status_check", sql`status = ANY (ARRAY['open'::text, 'under_review'::text, 'resolved'::text, 'dismissed'::text])`),
+	check("sync_conflicts_version_check", sql`version > 0`),
 ]);
 
 export const syncLocalIdentity = pgTable("sync_local_identity", {
 	organizationId: uuid("organization_id").primaryKey().notNull(),
 	nodeId: uuid("node_id").notNull(),
+	referenceBootstrapPending: boolean("reference_bootstrap_pending").default(false).notNull(),
 }, (table): PgTableExtraConfigValue[] => [
 	foreignKey({
 			columns: [table.organizationId],
@@ -1474,6 +1465,28 @@ export const syncLocalIdentity = pgTable("sync_local_identity", {
 			foreignColumns: [syncNodes.organizationId, syncNodes.id],
 			name: "sync_local_identity_organization_id_node_id_fkey"
 		}),
+]);
+
+export const syncSnapshotChunks = pgTable("sync_snapshot_chunks", {
+	organizationId: uuid("organization_id").notNull(),
+	id: uuid().default(sql`uuidv7()`).primaryKey().notNull(),
+	aggregateId: uuid("aggregate_id").notNull(),
+	chunkIndex: integer("chunk_index").notNull(),
+	total: integer().notNull(),
+	hash: char({ length: 64 }).notNull(),
+	data: text().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organizations.id],
+			name: "sync_snapshot_chunks_organization_id_fkey"
+		}),
+	unique("sync_snapshot_chunks_organization_id_aggregate_id_hash_chun_key").on(table.aggregateId, table.chunkIndex, table.hash, table.organizationId),
+	check("sync_snapshot_chunks_chunk_index_check", sql`(chunk_index >= 0) AND (chunk_index <= 127)`),
+	check("sync_snapshot_chunks_data_check", sql`octet_length(data) <= 174764`),
+	check("sync_snapshot_chunks_hash_check", sql`hash ~ '^[a-f0-9]{64}$'::text`),
+	check("sync_snapshot_chunks_total_check", sql`(total >= 1) AND (total <= 128)`),
 ]);
 
 export const syncOutbox = pgTable("sync_outbox", {
@@ -1501,10 +1514,23 @@ export const syncOutbox = pgTable("sync_outbox", {
 	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
 	publicationSequence: bigint("publication_sequence", { mode: "bigint" }).notNull(),
 	retryCycleAttempts: integer("retry_cycle_attempts").default(0).notNull(),
+	actorId: uuid("actor_id"),
+	dependencyKeys: text("dependency_keys").array(),
+	deliveryProtocolVersion: integer("delivery_protocol_version").default(2).notNull(),
 }, (table): PgTableExtraConfigValue[] => [
-	index("outbox_pending_idx").using("btree", table.organizationId.asc().nullsLast().op("timestamptz_ops"), table.status.asc().nullsLast().op("timestamptz_ops"), table.createdAt.asc().nullsLast().op("text_ops")),
-	index("sync_outbox_delivery_idx").using("btree", table.organizationId.asc().nullsLast().op("timestamptz_ops"), table.status.asc().nullsLast().op("text_ops"), table.nextAttemptAt.asc().nullsLast().op("uuid_ops"), table.createdAt.asc().nullsLast().op("timestamptz_ops"), table.id.asc().nullsLast().op("uuid_ops")),
-	index("sync_outbox_unsynced_order_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.publicationSequence.asc().nullsLast().op("int8_ops")).where(sql`(status <> 'synced'::text)`),
+	index("outbox_pending_idx").using("btree", table.organizationId.asc().nullsLast().op("text_ops"), table.status.asc().nullsLast().op("uuid_ops"), table.createdAt.asc().nullsLast().op("text_ops")),
+	index("sync_outbox_delivery_idx").using("btree", table.organizationId.asc().nullsLast().op("text_ops"), table.status.asc().nullsLast().op("uuid_ops"), table.nextAttemptAt.asc().nullsLast().op("timestamptz_ops"), table.createdAt.asc().nullsLast().op("text_ops"), table.id.asc().nullsLast().op("timestamptz_ops")),
+	index("sync_outbox_unsynced_order_idx").using("btree", table.organizationId.asc().nullsLast().op("int8_ops"), table.publicationSequence.asc().nullsLast().op("int8_ops")).where(sql`(status <> 'synced'::text)`),
+	foreignKey({
+			columns: [table.actorId],
+			foreignColumns: [authUsers.id],
+			name: "sync_outbox_actor_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.organizationId, table.actorId],
+			foreignColumns: [authUsers.organizationId, authUsers.id],
+			name: "sync_outbox_actor_scope"
+		}),
 	foreignKey({
 			columns: [table.organizationId],
 			foreignColumns: [organizations.id],
@@ -1517,15 +1543,124 @@ export const syncOutbox = pgTable("sync_outbox", {
 		}),
 	unique("sync_outbox_entity_type_entity_id_revision_key").on(table.entityId, table.entityType, table.revision),
 	unique("sync_outbox_publication_sequence_key").on(table.publicationSequence),
+	unique("sync_outbox_org_id_unique").on(table.id, table.organizationId),
 	check("sync_outbox_attempt_count_check", sql`attempt_count >= 0`),
 	check("sync_outbox_base_revision_check", sql`(base_revision >= 0) AND (base_revision < revision)`),
 	check("sync_outbox_central_sequence_check", sql`(central_sequence IS NULL) OR (central_sequence > 0)`),
+	check("sync_outbox_delivery_protocol_version_check", sql`delivery_protocol_version = ANY (ARRAY[1, 2])`),
 	check("sync_outbox_operation_check", sql`operation = ANY (ARRAY['CREATE'::text, 'UPDATE'::text, 'ARCHIVE'::text])`),
 	check("sync_outbox_payload_check", sql`(jsonb_typeof(payload) = 'object'::text) AND (octet_length((payload)::text) <= 262144)`),
 	check("sync_outbox_retry_cycle_attempts_check", sql`retry_cycle_attempts >= 0`),
 	check("sync_outbox_revision_check", sql`revision > 0`),
-	check("sync_outbox_status_check", sql`status = ANY (ARRAY['pending'::text, 'processing'::text, 'synced'::text, 'failed'::text])`),
+	check("sync_outbox_status_check", sql`status = ANY (ARRAY['pending'::text, 'processing'::text, 'synced'::text, 'failed'::text, 'conflicted'::text, 'rejected'::text, 'superseded'::text])`),
 	check("sync_outbox_version_check", sql`payload_version > 0`),
+]);
+
+export const syncConflictResolutions = pgTable("sync_conflict_resolutions", {
+	id: uuid().default(sql`uuidv7()`).primaryKey().notNull(),
+	organizationId: uuid("organization_id").notNull(),
+	conflictId: uuid("conflict_id").notNull(),
+	requestId: uuid("request_id").notNull(),
+	actorId: uuid("actor_id").notNull(),
+	resolution: text().notNull(),
+	reason: text().notNull(),
+	state: text().notNull(),
+	request: jsonb().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	index("sync_conflict_history_idx").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops"), table.conflictId.asc().nullsLast().op("uuid_ops"), table.createdAt.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.organizationId, table.actorId],
+			foreignColumns: [authUsers.organizationId, authUsers.id],
+			name: "sync_conflict_resolutions_organization_id_actor_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.organizationId, table.conflictId],
+			foreignColumns: [syncConflicts.organizationId, syncConflicts.id],
+			name: "sync_conflict_resolutions_organization_id_conflict_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organizations.id],
+			name: "sync_conflict_resolutions_organization_id_fkey"
+		}),
+	unique("sync_conflict_resolutions_organization_id_request_id_key").on(table.organizationId, table.requestId),
+	check("sync_conflict_resolutions_reason_check", sql`(length(btrim(reason)) >= 1) AND (length(btrim(reason)) <= 1000)`),
+	check("sync_conflict_resolutions_request_check", sql`(jsonb_typeof(request) = 'object'::text) AND (octet_length((request)::text) <= 262144)`),
+	check("sync_conflict_resolutions_resolution_check", sql`resolution = ANY (ARRAY['accept_authoritative'::text, 'reapply_local'::text, 'manual_merge'::text, 'reject_mutation'::text, 'escalate'::text])`),
+	check("sync_conflict_resolutions_state_check", sql`state = ANY (ARRAY['pending'::text, 'confirmed'::text])`),
+]);
+
+export const syncHistory = pgTable("sync_history", {
+	id: uuid().default(sql`uuidv7()`).primaryKey().notNull(),
+	organizationId: uuid("organization_id").notNull(),
+	nodeId: uuid("node_id").notNull(),
+	startedAt: timestamp("started_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	finishedAt: timestamp("finished_at", { withTimezone: true, mode: 'string' }),
+	pushed: integer().default(0).notNull(),
+	pulled: integer().default(0).notNull(),
+	accepted: integer().default(0).notNull(),
+	conflicts: integer().default(0).notNull(),
+	failed: integer().default(0).notNull(),
+	result: text().default('running').notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	index("sync_history_recent_idx").using("btree", table.organizationId.asc().nullsLast().op("timestamptz_ops"), table.startedAt.desc().nullsFirst().op("timestamptz_ops"), table.id.asc().nullsLast().op("timestamptz_ops")),
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organizations.id],
+			name: "sync_history_organization_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.organizationId, table.nodeId],
+			foreignColumns: [syncNodes.organizationId, syncNodes.id],
+			name: "sync_history_organization_id_node_id_fkey"
+		}),
+	check("sync_history_result_check", sql`result = ANY (ARRAY['running'::text, 'success'::text, 'partial'::text, 'failed'::text, 'interrupted'::text])`),
+]);
+
+export const syncChanges = pgTable("sync_changes", {
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	sequence: bigint({ mode: "bigint" }).primaryKey().generatedAlwaysAsIdentity({ name: "sync_changes_sequence_seq", startWith: 1, increment: 1, minValue: 1, maxValue: "9223372036854775807", cache: 1 }),
+	id: uuid().default(sql`uuidv7()`).notNull(),
+	organizationId: uuid("organization_id").notNull(),
+	sourceNodeId: uuid("source_node_id").notNull(),
+	sourceEventId: uuid("source_event_id").notNull(),
+	entityType: text("entity_type").notNull(),
+	entityId: uuid("entity_id").notNull(),
+	operation: text().notNull(),
+	revision: integer().notNull(),
+	payloadVersion: integer("payload_version").default(1).notNull(),
+	payload: jsonb().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	baseRevision: integer("base_revision").default(0).notNull(),
+	actorId: uuid("actor_id"),
+	protocolVersion: integer("protocol_version").default(1).notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	index("sync_changes_pull_idx").using("btree", table.organizationId.asc().nullsLast().op("int8_ops"), table.sequence.asc().nullsLast().op("int8_ops")),
+	index("sync_changes_v2_pull_idx").using("btree", table.organizationId.asc().nullsLast().op("int8_ops"), table.sequence.asc().nullsLast().op("uuid_ops")).where(sql`(protocol_version = 2)`),
+	foreignKey({
+			columns: [table.organizationId, table.sourceNodeId],
+			foreignColumns: [syncNodes.organizationId, syncNodes.id],
+			name: "sync_changes_node_scope"
+		}),
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organizations.id],
+			name: "sync_changes_organization_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.sourceNodeId],
+			foreignColumns: [syncNodes.id],
+			name: "sync_changes_source_node_id_fkey"
+		}),
+	unique("sync_changes_id_key").on(table.id),
+	unique("sync_changes_source_node_id_source_event_id_key").on(table.sourceEventId, table.sourceNodeId),
+	check("sync_changes_base_revision_check", sql`base_revision >= 0`),
+	check("sync_changes_operation_check", sql`operation = ANY (ARRAY['CREATE'::text, 'UPDATE'::text, 'ARCHIVE'::text])`),
+	check("sync_changes_payload_check", sql`(jsonb_typeof(payload) = 'object'::text) AND (octet_length((payload)::text) <= 262144)`),
+	check("sync_changes_payload_version_check", sql`payload_version > 0`),
+	check("sync_changes_protocol_version_check", sql`protocol_version = ANY (ARRAY[1, 2])`),
+	check("sync_changes_revision_check", sql`revision > 0`),
 ]);
 
 export const userRoles = pgTable("user_roles", {
@@ -1561,6 +1696,93 @@ export const rolePermissions = pgTable("role_permissions", {
 			name: "role_permissions_role_id_fkey"
 		}),
 	primaryKey({ columns: [table.permissionCode, table.roleId], name: "role_permissions_pkey"}),
+]);
+
+export const syncRemoteActors = pgTable("sync_remote_actors", {
+	organizationId: uuid("organization_id").notNull(),
+	actorId: uuid("actor_id").notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	foreignKey({
+			columns: [table.organizationId, table.actorId],
+			foreignColumns: [authUsers.organizationId, authUsers.id],
+			name: "sync_remote_actors_organization_id_actor_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organizations.id],
+			name: "sync_remote_actors_organization_id_fkey"
+		}),
+	primaryKey({ columns: [table.actorId, table.organizationId], name: "sync_remote_actors_pkey"}),
+	unique("sync_remote_actors_actor_id_key").on(table.actorId),
+]);
+
+export const syncCheckpoints = pgTable("sync_checkpoints", {
+	organizationId: uuid("organization_id").notNull(),
+	nodeId: uuid("node_id").notNull(),
+	// You can use { mode: "bigint" } if numbers are exceeding js number limitations
+	appliedSequence: bigint("applied_sequence", { mode: "bigint" }).default(0n).notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organizations.id],
+			name: "sync_checkpoints_organization_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.organizationId, table.nodeId],
+			foreignColumns: [syncNodes.organizationId, syncNodes.id],
+			name: "sync_checkpoints_organization_id_node_id_fkey"
+		}),
+	primaryKey({ columns: [table.nodeId, table.organizationId], name: "sync_checkpoints_pkey"}),
+	check("sync_checkpoints_applied_sequence_check", sql`applied_sequence >= 0`),
+]);
+
+export const syncResolutionProposals = pgTable("sync_resolution_proposals", {
+	organizationId: uuid("organization_id").notNull(),
+	requestId: uuid("request_id").notNull(),
+	conflictId: uuid("conflict_id").notNull(),
+	nodeId: uuid("node_id").notNull(),
+	request: jsonb().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	foreignKey({
+			columns: [table.organizationId, table.conflictId],
+			foreignColumns: [syncConflicts.organizationId, syncConflicts.id],
+			name: "sync_resolution_proposals_organization_id_conflict_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organizations.id],
+			name: "sync_resolution_proposals_organization_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.organizationId, table.nodeId],
+			foreignColumns: [syncNodes.organizationId, syncNodes.id],
+			name: "sync_resolution_proposals_organization_id_node_id_fkey"
+		}),
+	primaryKey({ columns: [table.organizationId, table.requestId], name: "sync_resolution_proposals_pkey"}),
+]);
+
+export const syncReceivedEvents = pgTable("sync_received_events", {
+	organizationId: uuid("organization_id").notNull(),
+	eventId: uuid("event_id").notNull(),
+	nodeId: uuid("node_id").notNull(),
+	request: jsonb().notNull(),
+	result: jsonb().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table): PgTableExtraConfigValue[] => [
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organizations.id],
+			name: "sync_received_events_organization_id_fkey"
+		}),
+	foreignKey({
+			columns: [table.organizationId, table.nodeId],
+			foreignColumns: [syncNodes.organizationId, syncNodes.id],
+			name: "sync_received_events_organization_id_node_id_fkey"
+		}),
+	primaryKey({ columns: [table.eventId, table.organizationId], name: "sync_received_events_pkey"}),
+	unique("sync_received_events_event_id_key").on(table.eventId),
 ]);
 
 export const syncInbox = pgTable("sync_inbox", {

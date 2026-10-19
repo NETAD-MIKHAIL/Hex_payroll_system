@@ -6,7 +6,8 @@ import { corsMiddleware } from './middleware/cors.js';
 import { healthRouter } from './routes/health.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createAuthService } from './auth/service.js';
-import { pool } from './db/pool.js';
+import type { Pool } from 'pg';
+import { pool as defaultPool } from './db/pool.js';
 import { createFoundationRouter } from './foundation/router.js';
 import { createTimekeepingRouter } from './timekeeping/router.js';
 import { createPayrollRouter } from './payroll/router.js';
@@ -69,8 +70,12 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
  * "desktop API" and "cloud API" to keep in sync — only one application with two
  * entrypoints.
  */
-export function createApp(): Express {
+export function createApp(
+  options: { database?: Pool; mode?: 'disabled' | 'local' | 'central' } = {},
+): Express {
   const app = express();
+  const pool = options.database ?? defaultPool;
+  const mode = options.mode ?? env.SYNC_MODE;
 
   app.disable('x-powered-by');
   // Before the body parser: a preflight carries no body, and a rejected origin
@@ -83,18 +88,22 @@ export function createApp(): Express {
   // Mounted under `/api`, which is where every consumer expects health
   // (`HEALTH_PATH` in @hexpayroll/shared) and where resource routes will live.
   app.use('/api', healthRouter);
-  app.use('/api', createSyncRouter(pool, env.SYNC_MODE === 'central'));
-  app.use('/api', createPayrollRouter(pool));
-  app.use('/api', createTimekeepingRouter(pool));
   app.use(
     '/api',
-    createFoundationRouter(pool, {
-      mode: env.SYNC_MODE,
-      interval: env.SYNC_INTERVAL_MS,
-      ...(env.SYNC_NODE_ID ? { nodeId: env.SYNC_NODE_ID } : {}),
-    }),
+    createSyncRouter(pool, mode === 'central', { mode, interval: env.SYNC_INTERVAL_MS }),
   );
-
+  if (mode !== 'central') {
+    app.use('/api', createPayrollRouter(pool));
+    app.use('/api', createTimekeepingRouter(pool));
+    app.use(
+      '/api',
+      createFoundationRouter(pool, {
+        mode,
+        interval: env.SYNC_INTERVAL_MS,
+        ...(env.SYNC_NODE_ID ? { nodeId: env.SYNC_NODE_ID } : {}),
+      }),
+    );
+  }
   app.use(notFound);
   app.use(errorHandler);
 

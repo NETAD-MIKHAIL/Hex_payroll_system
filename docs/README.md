@@ -5,11 +5,9 @@ Offline-first desktop payroll system for Philippine payroll operations.
 A payroll clerk must be able to keep working when the Internet is unavailable, and
 synchronise later. That single requirement shapes every decision below.
 
-**Current phase: Phase 4A — sync transport.** See [transport setup and limits](phase4-sync.md).
-Payroll periods, historical runs,
-deterministic computations, review, and immutable finalization extend Phase 1/2.
-Production statutory rules await verified imports; business-table replication remains deferred.
-See [Phase 3 operations](phase3-payroll.md) and its [implementation report](phase3-implementation-report.md).
+**Current phase: Phase 4.3, central synchronization.** See [implementation, provisioning, validation, and remaining work](phase4.3-central-sync.md).
+Payroll calculation and immutable finalization remain documented under
+[Phase 3 operations](phase3-payroll.md) and its [implementation report](phase3-implementation-report.md).
 
 > **Code reference:** the per-app and per-package documentation set starts at
 > [`docs/index.md`](index.md). This file stays the project, decision and setup overview.

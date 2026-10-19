@@ -226,13 +226,16 @@ export function createScheduleService(pool: Pool) {
           code: master.code,
           createdBy: actor.id,
         });
+        const savedDays = [];
         for (const d of days)
-          await insert(c, 'work_schedule_days', {
-            ...d,
-            organizationId: org,
-            versionId: version.id,
-          });
-        version.days = days;
+          savedDays.push(
+            await insert(c, 'work_schedule_days', {
+              ...d,
+              organizationId: org,
+              versionId: version.id,
+            }),
+          );
+        version.days = savedDays;
         await publish(
           c,
           actor,

@@ -67,8 +67,14 @@ const navigation = [
   {
     group: 'System',
     title: 'Sync Status',
-    path: '/sync-status',
+    path: '/sync',
     icon: 'M4 12a8 8 0 0 1 14-5 M20 12a8 8 0 0 1-14 5',
+  },
+  {
+    group: 'System',
+    title: 'Sync Conflicts',
+    path: '/sync/conflicts',
+    icon: 'M12 3 2 21h20L12 3 M12 9v5 M12 17v1',
   },
   {
     group: 'Administration',
@@ -127,7 +133,8 @@ export function AppLayout() {
     '/employees': 'employees.view',
     '/attendance': 'attendance.view',
     '/system-health': 'system_health.view',
-    '/sync-status': 'sync.view',
+    '/sync': 'sync.view',
+    '/sync/conflicts': 'sync.conflicts.view',
   };
   const navigationGroups = new Map<string, typeof navigation>();
   const groupOrder = ['Main', 'Workforce', 'Payroll', 'System', 'Administration'];

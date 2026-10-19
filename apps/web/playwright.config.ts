@@ -8,7 +8,7 @@ export default defineConfig({
     command: 'pnpm dev',
     url: 'http://127.0.0.1:5273',
     reuseExistingServer: true,
-    timeout: 60000,
+    timeout: 180000,
   },
   reporter: 'list',
 });

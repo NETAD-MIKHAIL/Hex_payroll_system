@@ -26,8 +26,27 @@ export async function importLocalNode(database: Pool, input: unknown) {
   const credential = nodeCredentialSchema.parse(input);
   await transaction(database, async (client) => {
     const setup = await client.query(
-      'SELECT organization_id FROM application_setup WHERE singleton FOR UPDATE',
+      'SELECT organization_id,administrator_id FROM application_setup WHERE singleton FOR UPDATE',
     );
+    let initializing = false;
+    if (setup.rows[0] && !setup.rows[0].organization_id) {
+      if (!setup.rows[0].administrator_id)
+        throw new Error('Bootstrap a local administrator before importing a device');
+      if ((await client.query('SELECT 1 FROM organizations LIMIT 1')).rowCount)
+        throw new Error('Import requires an empty organization or a matching canonical identity');
+      await client.query(
+        "INSERT INTO organizations(id,legal_name) VALUES($1,'Pending central organization')",
+        [credential.organizationId],
+      );
+      await client.query('UPDATE application_setup SET organization_id=$1 WHERE singleton', [
+        credential.organizationId,
+      ]);
+      await client.query('UPDATE auth_users SET organization_id=$1 WHERE organization_id IS NULL', [
+        credential.organizationId,
+      ]);
+      setup.rows[0].organization_id = credential.organizationId;
+      initializing = true;
+    }
     if (setup.rows[0]?.organization_id !== credential.organizationId)
       throw new Error('Credential organization does not match local setup');
     const existing = await client.query(
@@ -35,10 +54,7 @@ export async function importLocalNode(database: Pool, input: unknown) {
       [credential.organizationId],
     );
     const same = existing.rows.find((row) => row.id === credential.nodeId);
-    if (
-      same &&
-      (same.token_hash !== tokenHash(credential.token) || !same.enabled || same.revoked_at)
-    )
+    if (same && (!same.enabled || same.revoked_at))
       throw new Error('Existing node identity differs or was revoked');
     if (
       existing.rows.some(
@@ -56,8 +72,18 @@ export async function importLocalNode(database: Pool, input: unknown) {
           tokenHash(credential.token),
         ],
       );
+    if (same && same.token_hash !== tokenHash(credential.token))
+      await client.query(
+        'UPDATE sync_nodes SET token_hash=$2,credential_rotated_at=now() WHERE id=$1',
+        [credential.nodeId, tokenHash(credential.token)],
+      );
     // Future events use the enrolled identity; already queued origins are immutable.
     await selectLocalOrigin(client, credential.organizationId, credential.nodeId);
+    if (initializing)
+      await client.query(
+        'UPDATE sync_local_identity SET reference_bootstrap_pending=true WHERE organization_id=$1',
+        [credential.organizationId],
+      );
   });
   return credential;
 }
@@ -73,7 +99,6 @@ export function importedNodeEnvironment(original: string, input: unknown, endpoi
     'SYNC_MODE=disabled',
     `SYNC_CENTRAL_URL=${url}`,
     `SYNC_NODE_ID=${credential.nodeId}`,
-    `SYNC_NODE_TOKEN=${credential.token}`,
     '',
   ].join('\n');
 }

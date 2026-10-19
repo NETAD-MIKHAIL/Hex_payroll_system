@@ -8,6 +8,7 @@ import {
   importedNodeEnvironment,
   centralEndpointSchema,
 } from '../sync/import-node.js';
+import { windowsCredentials } from '../sync/credentials.js';
 import { nodeCredentialSchema } from '../sync/administration.js';
 
 let temporary: string | undefined;
@@ -45,6 +46,7 @@ try {
     flag: 'wx',
     mode: 0o600,
   });
+  await windowsCredentials.write(credential.nodeId, credential.token);
   await importLocalNode(pool, credential);
   // If rename fails, import of the same credential can be retried safely.
   if ((await readFile('.env', 'utf8')) !== original)
