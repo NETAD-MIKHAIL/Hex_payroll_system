@@ -20,6 +20,7 @@ const payload = {
   roles: ['viewer'],
 };
 const event = {
+  entity_type: 'auth_users',
   organization_id: org,
   sequence: '10',
   entity_id: id,
@@ -29,7 +30,7 @@ const event = {
   payload,
 };
 
-test('account validation rejects bad identity, plaintext verifiers and active archives before writes', async () => {
+test('generic account quarantine rejects invalid identities, plaintext verifiers and active archives before writes', async () => {
   const client = {
     query() {
       throw new Error('Unexpected database access');
@@ -41,10 +42,13 @@ test('account validation rejects bad identity, plaintext verifiers and active ar
     { ...event, operation: 'ARCHIVE' },
     { ...event, payload: { ...payload, passwordHash: 'plaintext' } },
   ])
-    await assert.rejects(applyAccountEvent(client, invalid), /Invalid|mismatch/);
+    await assert.rejects(
+      applyAccountEvent(client, invalid),
+      /Generic account distribution is suspended/,
+    );
 });
 
-test('new accounts receive verifier and roles without generating outgoing events', async () => {
+test('valid generic account snapshots cannot create credentials, users or role assignments', async () => {
   const calls: { sql: string; values: unknown[] }[] = [];
   const client = {
     async query(sql: string, values: unknown[] = []) {
@@ -52,11 +56,9 @@ test('new accounts receive verifier and roles without generating outgoing events
       return { rows: sql.includes('FROM roles') ? [{ id: org, code: 'viewer' }] : [] };
     },
   } as unknown as PoolClient;
-  await applyAccountEvent(client, event);
-  assert.equal(
-    calls.find((call) => call.sql.includes('INSERT INTO auth_users'))!.values[5],
-    DUMMY_PASSWORD_HASH,
+  await assert.rejects(
+    applyAccountEvent(client, event),
+    /Generic account distribution is suspended/,
   );
-  assert(calls.some((call) => call.sql.includes('INSERT INTO user_roles')));
-  assert(!calls.some((call) => call.sql.includes('sync_outbox')));
+  assert.equal(calls.length, 0);
 });

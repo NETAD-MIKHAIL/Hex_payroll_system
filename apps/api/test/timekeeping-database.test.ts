@@ -29,24 +29,23 @@ test(
       await migrate(f.migrator, f.migrations);
       const auth = createAuthService(f.runtime);
       const password = 'Timekeeping integration password 123!';
-      const user = await auth.createUser({
-        username: 'tkadmin',
-        displayName: 'Timekeeper',
-        password,
-      });
       const org = (
         await f.runtime.query<{ id: string }>(
           "INSERT INTO organizations(legal_name) VALUES('Timekeeping test') RETURNING id",
         )
       ).rows[0]!.id;
-      await f.runtime.query('UPDATE auth_users SET organization_id=$1 WHERE id=$2', [org, user.id]);
+      await f.runtime.query('UPDATE application_setup SET organization_id=$1 WHERE singleton', [
+        org,
+      ]);
+      const user = await auth.createUser({
+        username: 'tkadmin',
+        displayName: 'Timekeeper',
+        password,
+      });
       await f.runtime.query(
         "INSERT INTO user_roles SELECT $1,id FROM roles WHERE code='administrator' ON CONFLICT DO NOTHING",
         [user.id],
       );
-      await f.runtime.query('UPDATE application_setup SET organization_id=$1 WHERE singleton', [
-        org,
-      ]);
       const actor: Actor = {
         id: user.id,
         organizationId: org,
@@ -77,6 +76,12 @@ test(
         breakEndDayOffset: 0,
         graceMinutes: 5,
       }));
+      // Keep the later revision after the fixed October 2025 evidence.
+      // Use one date consistently across schedule and assignment history.
+      const laterEffectiveFrom = new Date(
+        Date.now() + 30 * 24 * 60 * 60 * 1000,
+      ).toISOString().slice(0, 10);
+
       const schedule = await schedules.save(actor, {
         code: 'DAY',
         name: 'Day shift',
@@ -97,7 +102,7 @@ test(
         () =>
           schedules.assign(actor, employee.id, {
             scheduleId: schedule.id,
-            effectiveFrom: '2026-11-01',
+            effectiveFrom: laterEffectiveFrom,
             effectiveTo: null,
             reason: null,
             expectedRevision: 1,
@@ -281,8 +286,8 @@ test(
           name: 'Later shift',
           description: null,
           status: 'active',
-          effectiveFrom: '2026-11-01',
-          reason: null,
+          effectiveFrom: laterEffectiveFrom,
+          reason: 'Historical schedule revision for regression testing',
           days: days.map((d) => (d.isWorkDay ? { ...d, startTime: '09:00', endTime: '18:00' } : d)),
           expectedRevision: 1,
         },
@@ -313,19 +318,19 @@ test(
       );
       await schedules.assign(actor, employee.id, {
         scheduleId: schedule.id,
-        effectiveFrom: '2026-11-01',
+        effectiveFrom: laterEffectiveFrom,
         effectiveTo: null,
         expectedRevision: 2,
         reason: 'Future assignment',
       });
       const assignments = await schedules.assignments(actor, employee.id);
       const historical = assignments.find((a) => a.effectiveFrom === '2025-01-01')!;
-      assert.equal(historical.effectiveTo, '2026-11-01');
+      assert.equal(historical.effectiveTo, laterEffectiveFrom);
       assert.ok((historical.history as unknown[]).length > 0);
       await schedules.correctAssignment(actor, historical.id, {
         scheduleId: schedule.id,
         effectiveFrom: '2025-01-02',
-        effectiveTo: '2026-11-01',
+        effectiveTo: laterEffectiveFrom,
         expectedRevision: Number(historical.revision),
         reason: 'Correct start date',
       });
@@ -334,7 +339,7 @@ test(
           schedules.correctAssignment(actor, historical.id, {
             scheduleId: schedule.id,
             effectiveFrom: '2025-01-03',
-            effectiveTo: '2026-11-01',
+            effectiveTo: laterEffectiveFrom,
             expectedRevision: Number(historical.revision),
             reason: 'Stale correction',
           }),

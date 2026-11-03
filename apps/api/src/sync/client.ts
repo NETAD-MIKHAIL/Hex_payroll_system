@@ -4,10 +4,15 @@ import {
   syncEventSchema,
   syncPullResponseSchema,
   syncPushResponseSchema,
+  trustedEvidencePullSchema,
+  canonicalSyncJson,
 } from '@hexpayroll/shared';
 import { transaction } from '../foundation/repository.js';
 import { tokenHash } from '../auth/service.js';
 import { applyInboxBatch } from './inbox.js';
+import { verifyTrustedEvidence } from './trusted-evidence.js';
+import { validateTrustedSnapshot } from './trusted-snapshots.js';
+import { requireBroadStreamsDisabled } from './pilot-scope.js';
 
 export interface SyncClientConfig {
   url: string;
@@ -61,6 +66,7 @@ async function ensureNode(pool: Pool, config: SyncClientConfig) {
   return r.rows[0].organization_id;
 }
 export async function pushNextBatch(pool: Pool, config: SyncClientConfig) {
+  await requireBroadStreamsDisabled(pool);
   const org = await ensureNode(pool, config),
     lease = randomUUID();
   const rows = await transaction(pool, async (c) => {
@@ -120,6 +126,7 @@ export async function pushNextBatch(pool: Pool, config: SyncClientConfig) {
   return true;
 }
 export async function pullNextBatch(pool: Pool, config: SyncClientConfig) {
+  await requireBroadStreamsDisabled(pool);
   const org = await ensureNode(pool, config);
   const r = await pool.query('SELECT last_pull_sequence::text FROM sync_nodes WHERE id=$1', [
     config.nodeId,
@@ -162,6 +169,94 @@ export async function pullNextBatch(pool: Pool, config: SyncClientConfig) {
     ]);
   });
   return response.changes.length > 0;
+}
+
+// Independent trusted transport cursor; business application has its own receipts.
+export async function pullNextTrustedEvidenceBatch(pool: Pool, config: SyncClientConfig) {
+  await requireBroadStreamsDisabled(pool);
+  const url = new URL(config.url);
+  if (
+    url.username ||
+    url.password ||
+    (url.protocol !== 'https:' &&
+      !(url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)))
+  )
+    throw new Error('Trusted evidence requires HTTPS or loopback transport');
+  const org = await ensureNode(pool, config);
+  const checkpoint = (
+    await pool.query(
+      `SELECT last_sequence::text FROM trusted_evidence_checkpoints
+    WHERE organization_id=$1 AND node_id=$2`,
+      [org, config.nodeId],
+    )
+  ).rows[0];
+  const after: string = checkpoint?.last_sequence ?? '0';
+  const response = trustedEvidencePullSchema.parse(
+    await syncRequest(config, 'evidence/pull?after=' + after),
+  );
+  let previous = BigInt(after);
+  const events = response.changes.map((change) => {
+    const event = verifyTrustedEvidence(change);
+    validateTrustedSnapshot(event);
+    if (event.organizationId !== org || BigInt(event.sequence) <= previous)
+      throw new Error('Invalid trusted evidence stream');
+    previous = BigInt(event.sequence);
+    return event;
+  });
+  if (BigInt(response.nextSequence) !== previous)
+    throw new Error('Invalid trusted evidence cursor');
+  await transaction(pool, async (client) => {
+    // Enrollment and independent checkpoint are checked again under the write lock.
+    const node = (
+      await client.query(
+        `SELECT organization_id FROM sync_nodes WHERE id=$1
+      AND token_hash=$2 AND enabled AND revoked_at IS NULL FOR SHARE`,
+        [config.nodeId, tokenHash(config.token)],
+      )
+    ).rows[0];
+    if (node?.organization_id !== org) throw new Error('Local installation not enrolled');
+    await client.query(
+      `INSERT INTO trusted_evidence_checkpoints(organization_id,node_id)
+      VALUES($1,$2) ON CONFLICT DO NOTHING`,
+      [org, config.nodeId],
+    );
+    const current = (
+      await client.query(
+        `SELECT last_sequence::text FROM trusted_evidence_checkpoints
+      WHERE organization_id=$1 AND node_id=$2 FOR UPDATE`,
+        [org, config.nodeId],
+      )
+    ).rows[0];
+    if (current.last_sequence !== after) return;
+    for (const event of events) {
+      const existing = (
+        await client.query(
+          `SELECT envelope FROM trusted_evidence_inbox
+        WHERE organization_id=$1 AND (sequence=$2 OR event_id=$3 OR acceptance_id=$4)`,
+          [org, event.sequence, event.eventId, event.acceptanceId],
+        )
+      ).rows;
+      if (existing.length) {
+        if (
+          existing.length !== 1 ||
+          canonicalSyncJson(existing[0].envelope) !== canonicalSyncJson(event)
+        )
+          throw new Error('Trusted evidence replay conflict');
+        continue;
+      }
+      await client.query(
+        `INSERT INTO trusted_evidence_inbox(organization_id,sequence,event_id,acceptance_id,envelope)
+        VALUES($1,$2,$3,$4,$5)`,
+        [org, event.sequence, event.eventId, event.acceptanceId, JSON.stringify(event)],
+      );
+    }
+    await client.query(
+      `UPDATE trusted_evidence_checkpoints SET last_sequence=$3
+      WHERE organization_id=$1 AND node_id=$2`,
+      [org, config.nodeId, response.nextSequence],
+    );
+  });
+  return events.length > 0;
 }
 export function startSyncWorker(
   pool: Pool,

@@ -27,6 +27,7 @@ import {
   type Actor,
 } from '../foundation/repository.js';
 import { interpretAttendance, type Shift, type Punch } from './processor.js';
+import { captureRawBatch } from './biometric-raw-capture.js';
 type Database = Pool | PoolClient;
 export type ProcessingActor = Omit<Actor, 'id'> & { id: string | null };
 export function organization(actor: Pick<Actor, 'organizationId'>): string {
@@ -468,7 +469,7 @@ export function createScheduleService(pool: Pool) {
   };
 }
 
-export function createTimeRecordService(pool: Pool) {
+export function createTimeRecordService(pool: Pool, options: { rawCaptureEnabled?: boolean } = {}) {
   return {
     async manual(actor: Actor, input: z.infer<typeof manualTimeRecordSchema>) {
       return transaction(pool, async (c) => {
@@ -518,9 +519,15 @@ export function createTimeRecordService(pool: Pool) {
     async ingest(actor: Actor, input: z.infer<typeof biometricBatchSchema>) {
       return transaction(pool, async (c) => {
         const org = organization(actor);
+        // Match inbox insertion: acquire the device evidence lock before any row locks.
+        // This transaction-scoped lock covers the entire check-and-insert batch offline.
+        await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [
+          'time_records:device:' + input.deviceId,
+        ]);
         const device = await find(c, 'biometric_devices', input.deviceId, org, true);
         if (device.status !== 'active')
           throw new DomainError(400, 'INVALID_REQUEST', 'Device inactive');
+        if (options.rawCaptureEnabled) await captureRawBatch(c, org, actor.id, input);
         let inserted = 0,
           duplicates = 0;
         const unmatched: string[] = [];
@@ -537,30 +544,36 @@ export function createTimeRecordService(pool: Pool) {
           const employeeId = mappings.rows[0].employee_id;
           await find(c, 'employees', employeeId, org, true);
           const existing = await c.query(
-            p.externalRecordId
-              ? 'SELECT * FROM time_records WHERE device_id=$1 AND external_record_id=$2'
-              : 'SELECT * FROM time_records WHERE device_id=$1 AND device_employee_id=$2 AND recorded_at=$3 AND record_type=$4 AND external_record_id IS NULL',
-            p.externalRecordId
-              ? [input.deviceId, p.externalRecordId]
-              : [input.deviceId, p.deviceEmployeeId, p.recordedAt, p.recordType],
+            `SELECT *,recorded_at=$4::timestamptz AS timestamp_matches
+             FROM time_records WHERE device_id=$1 AND (
+               ($2::text IS NOT NULL AND external_record_id=$2)
+               OR (device_employee_id=$3 AND recorded_at=$4::timestamptz AND record_type=$5)
+             )`,
+            [input.deviceId, p.externalRecordId, p.deviceEmployeeId, p.recordedAt, p.recordType],
           );
           if (existing.rows[0]) {
             const old = normalize(existing.rows[0]);
             if (
+              existing.rows.length !== 1 ||
+              old.organizationId !== org ||
               old.employeeId !== employeeId ||
               old.deviceEmployeeId !== p.deviceEmployeeId ||
-              Date.parse(String(old.recordedAt)) !== Date.parse(p.recordedAt) ||
-              old.recordType !== p.recordType
+              existing.rows[0].timestamp_matches !== true ||
+              old.recordType !== p.recordType ||
+              old.source !== 'biometric' ||
+              old.externalRecordId !== p.externalRecordId
             )
               throw new DomainError(
                 409,
                 'CONFLICT',
-                'External record ID reused with different evidence',
+                'External record ID reused with different evidence or physical punch identifier conflict',
               );
             duplicates++;
           } else {
+            const { sourceIdentity: rawSourceIdentity, ...mappedPunch } = p;
+            void rawSourceIdentity;
             const row = await insert(c, 'time_records', {
-              ...p,
+              ...mappedPunch,
               deviceId: input.deviceId,
               employeeId,
               organizationId: org,
@@ -709,7 +722,7 @@ interface Resolved {
   shift: Shift | null;
   day: Record<string, unknown>;
 }
-async function resolveShift(
+export async function resolveShift(
   c: PoolClient,
   org: string,
   employeeId: string,

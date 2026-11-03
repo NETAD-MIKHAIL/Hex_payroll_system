@@ -9,7 +9,11 @@
     "build": "electron-vite build --ignoreConfigWarning",
     "preview": "electron-vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "package": "electron-builder --config electron-builder.yml"
+    "prepare:resources": "node scripts/prepare-resources.mjs",
+    "test:runtime": "node scripts/verify-runtime.mjs",
+    "test:packaged": "node scripts/verify-packaged.mjs",
+    "package": "electron-builder --config electron-builder.yml --win nsis --x64 --publish never",
+    "package:rehearsal": "electron-builder --config electron-builder.yml --win nsis --x64 --publish never --config.forceCodeSigning=false"
   },
   "devDependencies": {
     "@types/node": "26.6.3",

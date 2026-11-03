@@ -45,6 +45,36 @@ test(
         payloadVersion: 1 as const,
         payload: { name: 'Finance', code: 'FIN' },
       };
+      await t.test('PUSH authenticates before validating payload', async () => {
+        const before = (
+          await central.runtime.query('SELECT count(*)::integer AS count FROM sync_changes')
+        ).rows[0].count;
+
+        await assert.rejects(
+          pushEvents(central.runtime, '', {}),
+          { code: 'NODE_INVALID', status: 401 },
+        );
+
+        await assert.rejects(
+          pushEvents(central.runtime, 'a'.repeat(43), { events: [event] }),
+          { code: 'NODE_INVALID', status: 401 },
+        );
+
+        await assert.rejects(
+          pushEvents(central.runtime, node.token, {}),
+          (error: unknown) => {
+            assert.equal((error as { name?: string }).name, 'ZodError');
+            return true;
+          },
+        );
+
+        const after = (
+          await central.runtime.query('SELECT count(*)::integer AS count FROM sync_changes')
+        ).rows[0].count;
+
+        assert.equal(after, before, 'Rejected PUSH requests must not create sync events');
+      });
+
       await t.test('one-time secret is hashed and invalid credentials fail', async () => {
         const stored = (
           await central.runtime.query('SELECT token_hash FROM sync_nodes WHERE id=$1', [
@@ -159,6 +189,64 @@ test(
         nodeId: node.nodeId,
         token: node.token,
       };
+      await t.test('HTTP PUSH authenticates before payload validation', async () => {
+        const securityApp = express();
+        securityApp.use(express.json({ limit: '1mb' }));
+        securityApp.use('/api', createSyncRouter(central.runtime, true));
+
+        const securityServer = securityApp.listen(0, '127.0.0.1');
+        try {
+          await once(securityServer, 'listening');
+          const securityAddress = securityServer.address();
+          assert.ok(securityAddress && typeof securityAddress !== 'string');
+          const base = `http://127.0.0.1:${securityAddress.port}`;
+
+          const before = (
+            await central.runtime.query('SELECT count(*)::integer AS count FROM sync_changes')
+          ).rows[0].count;
+
+          const post = (token: string | undefined, body: unknown) =>
+            fetch(base + '/api/sync/push', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              },
+              body: JSON.stringify(body),
+            });
+
+          const missing = await post(undefined, {});
+          assert.equal(missing.status, 401);
+          assert.equal((await missing.json()).error.code, 'NODE_INVALID');
+
+          const invalid = await post('a'.repeat(43), { events: [event] });
+          assert.equal(invalid.status, 401);
+          assert.equal((await invalid.json()).error.code, 'NODE_INVALID');
+
+          const malformed = await post(node.token, {});
+          assert.equal(malformed.status, 400);
+          assert.equal((await malformed.json()).error.code, 'INVALID_REQUEST');
+
+          const unauthenticatedPull = await fetch(base + '/api/sync/pull?after=0');
+          assert.equal(unauthenticatedPull.status, 401);
+          assert.equal((await unauthenticatedPull.json()).error.code, 'NODE_INVALID');
+
+          const authenticatedPull = await fetch(base + '/api/sync/pull?after=0', {
+            headers: { Authorization: `Bearer ${node.token}` },
+          });
+          assert.equal(authenticatedPull.status, 200);
+
+          const after = (
+            await central.runtime.query('SELECT count(*)::integer AS count FROM sync_changes')
+          ).rows[0].count;
+          assert.equal(after, before, 'Rejected HTTP requests must not create sync events');
+        } finally {
+          await new Promise<void>((resolve, reject) => {
+            securityServer.close((error) => error ? reject(error) : resolve());
+            securityServer.closeAllConnections();
+          });
+        }
+      });
       const queued = randomUUID();
       await local.runtime.query(
         "INSERT INTO sync_outbox(id,organization_id,entity_type,entity_id,operation,revision,payload) VALUES($1,$2,'departments',$3,'CREATE',1,$4)",

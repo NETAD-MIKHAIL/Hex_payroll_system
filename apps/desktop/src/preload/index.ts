@@ -3,16 +3,14 @@ import { contextBridge } from 'electron';
 /**
  * The renderer-facing bridge.
  *
- * PHASE 0 SCOPE: expose immutable runtime facts and prove the preload wiring.
- *
- * In later phases this is where the shell will hand the renderer the ephemeral
- * loopback port and the per-launch bearer token of the private local API —
- * which is exactly why apps/web never hardcodes an API URL.
+ * Exposes immutable runtime facts. Packaged requests use the renderer's own
+ * origin; main adds private credentials outside the renderer JavaScript world.
  *
  * NOTE: apps/web is deliberately Electron-agnostic and does NOT depend on this
  * shape. It must remain buildable for a plain browser.
  */
 const bridge = {
+  privateRuntime: process.argv.includes('--hex-private-runtime'),
   platform: process.platform,
   versions: {
     electron: process.versions.electron,

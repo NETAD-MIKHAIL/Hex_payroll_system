@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { captureSourceClosure } from '../sync/source-closures.js';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import {
@@ -28,11 +29,15 @@ import {
   createLeaveService,
   createAttendanceService,
 } from './services.js';
-export function createTimekeepingRouter(pool: Pool) {
+export function createTimekeepingRouter(
+  pool: Pool,
+  rawCaptureEnabled = false,
+  sourceCertificationEnabled = false,
+) {
   const router = Router();
   router.use(authenticate(pool));
   const schedules = createScheduleService(pool),
-    records = createTimeRecordService(pool),
+    records = createTimeRecordService(pool, { rawCaptureEnabled }),
     leave = createLeaveService(pool),
     attendance = createAttendanceService(pool);
   const actor = (res: { locals: Record<string, unknown> }, permission: Permission) => {
@@ -207,6 +212,16 @@ export function createTimekeepingRouter(pool: Pool) {
   router.post('/time-records/ingest', async (req, res) =>
     res.json(
       await records.ingest(actor(res, 'time_records.ingest'), biometricBatchSchema.parse(req.body)),
+    ),
+  );
+  router.post('/biometric-source-closures', async (req, res) =>
+    res.json(
+      await captureSourceClosure(
+        pool,
+        actor(res, 'time_records.ingest'),
+        req.body,
+        sourceCertificationEnabled,
+      ),
     ),
   );
   router.get('/time-records/:id', async (req, res) =>

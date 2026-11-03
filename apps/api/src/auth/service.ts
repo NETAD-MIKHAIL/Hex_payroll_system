@@ -17,7 +17,7 @@ interface UserRow {
   username: string;
   email: string | null;
   display_name: string;
-  password_hash: string;
+  password_hash: string | null;
   active: boolean;
 }
 function publicUser(row: UserRow): PublicUser {
@@ -54,7 +54,7 @@ export function createAuthService(database: Pool) {
     async login(input: LoginRequest): Promise<LoginResponse | null> {
       const column = input.identifier.includes('@') ? 'email' : 'username';
       const found = await database.query<UserRow>(
-        `SELECT * FROM auth_users WHERE lower(${column}) = lower($1)`,
+        `SELECT * FROM auth_users u WHERE lower(${column}) = lower($1) AND NOT identity_only AND NOT EXISTS(SELECT 1 FROM trusted_actor_identities t WHERE t.user_id=u.id AND NOT t.active)`,
         [input.identifier],
       );
       const row = found.rows[0];
@@ -64,7 +64,7 @@ export function createAuthService(database: Pool) {
       // Recheck activation before inserting; protected requests also check activation.
       return transaction(database, async (client) => {
         const result = await client.query<{ expires_at: Date }>(
-          "INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at) SELECT $1, id, now(), now() + ($3 * interval '1 millisecond') FROM auth_users WHERE id=$2 AND active RETURNING expires_at",
+          "INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at) SELECT $1, id, now(), now() + ($3 * interval '1 millisecond') FROM auth_users u WHERE id=$2 AND active AND NOT identity_only AND NOT EXISTS(SELECT 1 FROM trusted_actor_identities t WHERE t.user_id=u.id AND NOT t.active) RETURNING expires_at",
           [tokenHash(accessToken), row.id, SESSION_LIFETIME_MS],
         );
         if (!result.rows[0]) return null;
@@ -85,7 +85,7 @@ export function createAuthService(database: Pool) {
     },
     async session(token: string): Promise<SessionResponse | null> {
       const result = await database.query<UserRow & { expires_at: Date }>(
-        'SELECT u.*, s.expires_at FROM auth_sessions s JOIN auth_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at > now() AND u.active',
+        'SELECT u.*, s.expires_at FROM auth_sessions s JOIN auth_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at > now() AND u.active AND NOT u.identity_only AND NOT EXISTS(SELECT 1 FROM trusted_actor_identities t WHERE t.user_id=u.id AND NOT t.active)',
         [tokenHash(token)],
       );
       const row = result.rows[0];

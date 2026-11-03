@@ -170,7 +170,7 @@ test('viewer navigation hides administration and direct routes are guarded', asy
   await expect(navigation.getByText('Workforce', { exact: true })).toHaveCount(1);
   await expect(navigation.getByText('System', { exact: true })).toHaveCount(0);
   await expect(
-    navigation.getByRole('link', { name: 'Employee Attendance', exact: true }),
+    navigation.getByRole('link', { name: 'Attendance Management', exact: true }),
   ).toHaveCount(0);
   await expect(page.getByRole('link', { name: 'Sync Status', exact: true })).toHaveCount(0);
   await page.evaluate(() => {

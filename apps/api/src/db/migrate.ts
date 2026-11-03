@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 export interface Migration {
   name: string;
   sql: string;
@@ -25,17 +25,73 @@ export async function readMigrations(directory: string): Promise<Migration[]> {
   return migrations;
 }
 export async function migrate(database: Pool, migrations: Migration[]): Promise<string[]> {
+  return runMigrations(database, migrations, 'schema_migrations');
+}
+
+export interface CentralMigrationTarget {
+  mode: 'central' | 'local' | 'disabled';
+  expectedDatabase: string;
+}
+
+export async function migrateCentral(
+  database: Pool,
+  migrations: Migration[],
+  sharedMigrations: Migration[],
+  target: CentralMigrationTarget,
+): Promise<string[]> {
+  if (target.mode !== 'central' || !target.expectedDatabase.trim()) {
+    throw new MigrationHistoryError(
+      'Central migrations require central mode and an explicit database name',
+    );
+  }
+  return runMigrations(database, migrations, 'central_schema_migrations', async (client) => {
+    const identity = await client.query<{ database: string }>(
+      'SELECT current_database() AS database',
+    );
+    if (identity.rows[0]?.database !== target.expectedDatabase) {
+      throw new MigrationHistoryError(
+        'Central migration database does not match the explicit target',
+      );
+    }
+    // Fail before central DDL: shared migrations must already be installed and current.
+    const existing = await client.query<{ name: string; checksum: string }>(
+      'SELECT name,checksum FROM schema_migrations ORDER BY name',
+    );
+    if (
+      !sharedMigrations.length ||
+      existing.rows.length !== sharedMigrations.length ||
+      sharedMigrations.some(
+        (source) =>
+          !existing.rows.some(
+            (row) => row.name === source.name && row.checksum === source.checksum,
+          ),
+      )
+    ) {
+      throw new MigrationHistoryError(
+        'Apply the current shared migrations before central migrations',
+      );
+    }
+  });
+}
+
+async function runMigrations(
+  database: Pool,
+  migrations: Migration[],
+  ledger: 'schema_migrations' | 'central_schema_migrations',
+  verify?: (client: PoolClient) => Promise<void>,
+): Promise<string[]> {
   const client = await database.connect();
   const applied: string[] = [];
   let locked = false;
   try {
     await client.query('SELECT pg_advisory_lock(684297103)');
     locked = true;
+    if (verify) await verify(client);
     await client.query(
-      'CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, checksum char(64) NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())',
+      `CREATE TABLE IF NOT EXISTS ${ledger} (name text PRIMARY KEY, checksum char(64) NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`,
     );
     const existing = await client.query<{ name: string; checksum: string }>(
-      'SELECT name, checksum FROM schema_migrations ORDER BY name',
+      `SELECT name, checksum FROM ${ledger} ORDER BY name`,
     );
     for (const row of existing.rows) {
       const source = migrations.find((migration) => migration.name === row.name);
@@ -49,7 +105,7 @@ export async function migrate(database: Pool, migrations: Migration[]): Promise<
       await client.query('BEGIN');
       try {
         await client.query(migration.sql);
-        await client.query('INSERT INTO schema_migrations (name,checksum) VALUES ($1,$2)', [
+        await client.query(`INSERT INTO ${ledger} (name,checksum) VALUES ($1,$2)`, [
           migration.name,
           migration.checksum,
         ]);

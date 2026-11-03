@@ -41,7 +41,7 @@ const navigation = [
   },
   {
     group: 'Workforce',
-    title: 'Employee Attendance',
+    title: 'Attendance Management',
     path: '/attendance',
     icon: 'M5 5h14v16H5z M8 3v4 M16 3v4 M5 10h14 M8 14h3 M8 17h7',
   },

@@ -1,16 +1,14 @@
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, shell, dialog, session } from 'electron';
 import { get } from 'node:http';
 import { join } from 'node:path';
+import { serveRenderer } from './renderer-server';
+import { startPrivateRuntime, createPrivateToken } from './private-runtime';
 
 /**
  * Hex Payroll desktop shell.
  *
- * PHASE 0 SCOPE: window, preload, single-instance guard, and loading apps/web.
- *
- * NOT YET IMPLEMENTED (later phases):
- *   - spawning the private PostgreSQL cluster (Phase 4)
- *   - spawning the local Express API as a child process with an ephemeral
- *     loopback port and a per-launch bearer token (Phase 1/4)
+ * Packaged startup owns the private database/API supervisor and loopback UI.
+ * Development continues to use the independently launched workspace services.
  */
 
 /** Where apps/web's dev server listens (see apps/web/vite.config.ts). */
@@ -42,6 +40,9 @@ const DEV_SERVER_MAX_ATTEMPTS = 20;
 const DEV_SERVER_RETRY_MS = 500;
 
 let mainWindow: BrowserWindow | null = null;
+let rendererServer: Awaited<ReturnType<typeof serveRenderer>> | null = null;
+let privateRuntime: Awaited<ReturnType<typeof startPrivateRuntime>> | undefined;
+let quitting = false;
 
 /**
  * One readiness probe.
@@ -150,7 +151,8 @@ async function loadDevServer(window: BrowserWindow, attempt = 1): Promise<void> 
 async function loadUi(window: BrowserWindow): Promise<void> {
   if (app.isPackaged) {
     // electron-builder ships apps/web/dist as an extra resource named "web".
-    await window.loadFile(join(process.resourcesPath, 'web', 'index.html'));
+    rendererServer ??= await serveRenderer(join(process.resourcesPath, 'web'));
+    await window.loadURL(rendererServer.url);
     return;
   }
 
@@ -172,6 +174,7 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      additionalArguments: app.isPackaged ? ['--hex-private-runtime'] : [],
     },
   });
 
@@ -186,12 +189,25 @@ function createWindow(): void {
 
   // Never let the renderer spawn arbitrary Electron windows.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
+    const target = new URL(url);
+    if (['https:', 'http:'].includes(target.protocol) && !target.username && !target.password)
+      void shell.openExternal(url);
     return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (new URL(url).origin !== new URL(mainWindow!.webContents.getURL()).origin)
+      event.preventDefault();
   });
 
   void loadUi(mainWindow).catch((error: unknown) => {
     console.error('[desktop] failed to load the UI:', error);
+    if (app.isPackaged) {
+      dialog.showErrorBox(
+        'Hex Payroll interface could not load',
+        'Reinstall this version to repair application files. Your private database has not been deleted.',
+      );
+      app.quit();
+    }
   });
 }
 
@@ -203,6 +219,14 @@ function createWindow(): void {
  * corrupt it. Establishing the guard now means that safety property exists
  * before the thing it protects.
  */
+// An explicit Chromium switch gives isolated package tests their own profile.
+const isolatedProfile = app.commandLine.getSwitchValue('user-data-dir');
+if (isolatedProfile) app.setPath('userData', isolatedProfile);
+else if (app.isPackaged) {
+  if (!process.env.LOCALAPPDATA)
+    throw new Error('Windows local application-data directory unavailable');
+  app.setPath('userData', join(process.env.LOCALAPPDATA, 'Hex Payroll'));
+}
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!hasSingleInstanceLock) {
@@ -221,6 +245,36 @@ if (!hasSingleInstanceLock) {
     .whenReady()
     .then(async () => {
       app.setAppUserModelId('ph.hexpayroll.desktop');
+      if (app.isPackaged) {
+        const token = createPrivateToken();
+        rendererServer = await serveRenderer(join(process.resourcesPath, 'web'), token);
+        privateRuntime = await startPrivateRuntime(
+          join(app.getPath('userData'), 'private-runtime'),
+          process.resourcesPath,
+          rendererServer.url,
+          token,
+        );
+        rendererServer.setApi(privateRuntime.url);
+        const rendererOrigin = rendererServer.url;
+        session.defaultSession.webRequest.onBeforeSendHeaders(
+          { urls: [rendererOrigin + '/api/*'] },
+          (details, callback) => {
+            if (details.webContentsId === mainWindow?.webContents.id) {
+              details.requestHeaders['X-Hex-Renderer-Token'] = token;
+            }
+            callback({ requestHeaders: details.requestHeaders });
+          },
+        );
+        privateRuntime.child.on('exit', () => {
+          if (!quitting && !privateRuntime?.expectedExit()) {
+            dialog.showErrorBox(
+              'Hex Payroll local services stopped',
+              'Close and reopen Hex Payroll. Your database has not been deleted.',
+            );
+            app.quit();
+          }
+        });
+      }
 
       // Development only: a packaged shell loads the built UI from disk, so there is
       // nothing to wait for. `HEX_WEB_WAIT_TIMEOUT_MS=0` opts out of the gate. A timeout
@@ -239,7 +293,20 @@ if (!hasSingleInstanceLock) {
       });
     })
     .catch((error: unknown) => {
-      console.error('[desktop] failed to start:', error);
+      console.error(
+        '[desktop] failed to start:',
+        app.isPackaged
+          ? {
+              name: error instanceof Error ? error.name : 'unknown',
+              message: error instanceof Error ? error.message : 'Startup failed',
+            }
+          : error,
+      );
+      if (app.isPackaged)
+        dialog.showErrorBox(
+          'Hex Payroll could not start',
+          `${error instanceof Error ? error.message : 'Startup failed'}\nData folder: ${app.getPath('userData')}\nDo not delete this folder. Reinstalling does not reset payroll data.`,
+        );
       // Non-zero on purpose: `pnpm dev` runs concurrently with `--success first`, so the
       // first process to exit decides the result. A shell that could not start must not
       // look like a clean shutdown just because it quit deliberately.
@@ -250,5 +317,12 @@ if (!hasSingleInstanceLock) {
     if (process.platform !== 'darwin') {
       app.quit();
     }
+  });
+  app.on('will-quit', () => rendererServer?.server.close());
+  app.on('before-quit', (event) => {
+    if (!privateRuntime || quitting) return;
+    event.preventDefault();
+    quitting = true;
+    void privateRuntime.stop().finally(() => app.quit());
   });
 }

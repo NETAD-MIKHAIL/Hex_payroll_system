@@ -11,6 +11,15 @@ import { createFoundationRouter } from './foundation/router.js';
 import { createTimekeepingRouter } from './timekeeping/router.js';
 import { createPayrollRouter } from './payroll/router.js';
 import { createSyncRouter } from './sync/router.js';
+import type { Pool } from 'pg';
+import { createAttendanceFinalizationRouter } from './timekeeping/attendance-finalization-router.js';
+import { createAttendanceDesktopRouter } from './timekeeping/attendance-desktop-router.js';
+import { pilotBoundary } from './sync/pilot-scope.js';
+import { syncPushPreparseAuth } from './sync/push-preparse-auth.js';
+import { privateApiBoundary } from './middleware/private-api.js';
+import { desktopSetupRouter } from './desktop/router.js';
+import type { DesktopEnrollment } from './desktop/enrollment.js';
+import type { DesktopDeviceConfiguration } from './desktop/device-config.js';
 
 export const logger = pino({ level: env.LOG_LEVEL });
 
@@ -69,23 +78,80 @@ const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
  * "desktop API" and "cloud API" to keep in sync — only one application with two
  * entrypoints.
  */
-export function createApp(): Express {
+export function createApp(
+  options: {
+    attendanceWriter?: Pool;
+    enroll?: (input: DesktopEnrollment) => Promise<void>;
+    devices?: DesktopDeviceConfiguration;
+  } = {},
+): Express {
   const app = express();
 
   app.disable('x-powered-by');
+  app.use(privateApiBoundary(env.HEX_PRIVATE_API_TOKEN, env.HEX_RENDERER_ORIGIN));
+  if (env.HEX_PRIVATE_API_TOKEN)
+    app.use('/api/desktop', desktopSetupRouter(pool, options.enroll, options.devices));
   // Before the body parser: a preflight carries no body, and a rejected origin
   // must not be able to make the server parse anything.
   app.use(corsMiddleware);
+  app.use(pilotBoundary(pool));
   app.use('/api/auth', createAuthRouter(createAuthService(pool)));
+  // Central PUSH authentication precedes JSON parsing, after the pilot boundary.
+  if (env.SYNC_MODE === 'central') {
+    app.post('/api/sync/push', syncPushPreparseAuth(pool));
+  }
   app.use(express.json({ limit: '1mb' }));
   app.use(requestLogger);
 
   // Mounted under `/api`, which is where every consumer expects health
   // (`HEALTH_PATH` in @hexpayroll/shared) and where resource routes will live.
   app.use('/api', healthRouter);
-  app.use('/api', createSyncRouter(pool, env.SYNC_MODE === 'central'));
+  app.use(
+    '/api',
+    createAttendanceDesktopRouter(pool, {
+      mode: env.SYNC_MODE,
+      capture: env.SYNC_BIOMETRIC_EVIDENCE_ENABLED,
+      finalization: env.ATTENDANCE_FINALIZATION_ENABLED,
+      ...(env.SYNC_MODE === 'local'
+        ? {
+            central: {
+              url: env.SYNC_CENTRAL_URL!,
+              nodeId: env.SYNC_NODE_ID!,
+              token: env.SYNC_NODE_TOKEN!,
+            },
+          }
+        : {}),
+    }),
+  );
+  app.use(
+    '/api',
+    createSyncRouter(
+      pool,
+      env.SYNC_MODE === 'central',
+      env.SYNC_MODE === 'local'
+        ? { url: env.SYNC_CENTRAL_URL!, nodeId: env.SYNC_NODE_ID!, token: env.SYNC_NODE_TOKEN! }
+        : undefined,
+      env.SYNC_BIOMETRIC_EVIDENCE_ENABLED,
+    ),
+  );
   app.use('/api', createPayrollRouter(pool));
-  app.use('/api', createTimekeepingRouter(pool));
+  app.use(
+    '/api',
+    createAttendanceFinalizationRouter(
+      pool,
+      env.SYNC_MODE,
+      env.ATTENDANCE_FINALIZATION_ENABLED,
+      options.attendanceWriter,
+    ),
+  );
+  app.use(
+    '/api',
+    createTimekeepingRouter(
+      pool,
+      env.SYNC_BIOMETRIC_EVIDENCE_ENABLED,
+      env.ATTENDANCE_FINALIZATION_ENABLED,
+    ),
+  );
   app.use(
     '/api',
     createFoundationRouter(pool, {

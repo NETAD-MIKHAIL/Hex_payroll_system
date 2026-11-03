@@ -1,5 +1,9 @@
 /// <reference types="vite/client" />
 
+interface Window {
+  readonly hexpayroll?: { readonly privateRuntime: boolean };
+}
+
 interface ImportMetaEnv {
   /**
    * Base URL of the Hex Payroll API.

@@ -114,6 +114,16 @@ export const correctionInputSchema = z
     (v) => v.operation === 'void' || (v.recordedAt !== null && v.recordType !== null),
     'Replacement requires timestamp and type',
   );
+export const biometricSourceIdentitySchema = z
+  .object({
+    epoch: z.uuid(),
+    sequence: z
+      .string()
+      .regex(/^[1-9][0-9]{0,15}$/)
+      .refine((v) => BigInt(v) <= BigInt(Number.MAX_SAFE_INTEGER)),
+    entryId: z.string().min(1).max(254),
+  })
+  .strict();
 export const biometricBatchSchema = z
   .object({
     deviceId: z.uuid(),
@@ -125,6 +135,7 @@ export const biometricBatchSchema = z
             recordedAt: instant,
             recordType: timeRecordTypeSchema,
             externalRecordId: z.string().trim().min(1).max(254).nullable().default(null),
+            sourceIdentity: biometricSourceIdentitySchema.optional(),
           })
           .strict(),
       )

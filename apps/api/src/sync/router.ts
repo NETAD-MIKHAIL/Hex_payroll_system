@@ -5,8 +5,19 @@ import { syncRegistrationSchema, syncSequenceSchema } from '@hexpayroll/shared';
 import { authenticate, domainErrors } from '../timekeeping/middleware.js';
 import { DomainError, type Actor } from '../foundation/repository.js';
 import { pullChanges, pushEvents, registerNode } from './service.js';
+import { pullTrustedEvidence } from './trusted-evidence.js';
+import { pullTrustedIdentities } from './central-identities.js';
+import { createEvidenceReconciliationService } from './evidence-reconciliation.js';
+import type { SyncClientConfig } from './client.js';
+import { createCentralBiometricEvidenceService } from '../timekeeping/central-biometric-evidence.js';
+import { createAttendanceEvidenceReviewService } from '../timekeeping/attendance-evidence-review.js';
 
-export function createSyncRouter(pool: Pool, central: boolean) {
+export function createSyncRouter(
+  pool: Pool,
+  central: boolean,
+  localConfig?: SyncClientConfig,
+  biometricEnabled = false,
+) {
   const router = Router();
   router.use((_req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -14,12 +25,61 @@ export function createSyncRouter(pool: Pool, central: boolean) {
   });
   // The local server never accidentally accepts central delivery requests.
   router.use((req, _res, next) => {
-    if (!central && /^\/sync\/(nodes|push|pull)(\/|$)/.test(req.path))
+    if (!central && /^\/sync\/(nodes|push|pull|evidence|identities)(\/|$)/.test(req.path))
       next(new DomainError(404, 'NOT_FOUND', 'Central synchronization is disabled'));
     else next();
   });
   const credential = (header: string | undefined) =>
     /^Bearer ([A-Za-z0-9_-]{43})$/i.exec(header ?? '')?.[1] ?? '';
+  const biometric = createCentralBiometricEvidenceService(
+    pool,
+    central ? 'central' : 'local',
+    biometricEnabled,
+  );
+  const reviewAttendance = createAttendanceEvidenceReviewService(
+    pool,
+    central ? 'central' : 'local',
+    biometricEnabled,
+  );
+  router.post('/sync/attendance/evidence-review', async (req, res) =>
+    res.json(
+      await reviewAttendance(
+        {
+          nodeToken: credential(req.headers.authorization),
+          sessionToken: req.get('X-Central-Session') ?? '',
+        },
+        req.body,
+      ),
+    ),
+  );
+  router.post('/sync/biometric/receive', async (req, res) =>
+    res.json(await biometric.receive(credential(req.headers.authorization), req.body)),
+  );
+  if (!central && localConfig) {
+    const reconciliation = createEvidenceReconciliationService(pool, localConfig, 'local');
+    router.get('/sync/local-evidence/:sequence', async (req, res) =>
+      res.json(
+        await reconciliation.inspect(credential(req.headers.authorization), req.params.sequence),
+      ),
+    );
+    router.post('/sync/local-evidence/reconcile', async (req, res) =>
+      res.json(await reconciliation.reconcile(credential(req.headers.authorization), req.body)),
+    );
+  }
+  router.get('/sync/identities/pull', async (req, res) => {
+    const q = z
+      .object({ after: syncSequenceSchema.default('0') })
+      .strict()
+      .parse(req.query);
+    res.json(await pullTrustedIdentities(pool, credential(req.headers.authorization), q.after));
+  });
+  router.get('/sync/evidence/pull', async (req, res) => {
+    const q = z
+      .object({ after: syncSequenceSchema.default('0') })
+      .strict()
+      .parse(req.query);
+    res.json(await pullTrustedEvidence(pool, credential(req.headers.authorization), q.after));
+  });
   router.post('/sync/push', async (req, res) =>
     res.json(await pushEvents(pool, credential(req.headers.authorization), req.body)),
   );
@@ -103,7 +163,7 @@ export function createSyncRouter(pool: Pool, central: boolean) {
         'Retry outgoing events on the local installation',
       );
     const r = await pool.query(
-      "UPDATE sync_outbox SET status='pending',next_attempt_at=NULL,error=NULL WHERE organization_id=$1 AND status='failed' RETURNING id",
+      "UPDATE sync_outbox o SET status='pending',next_attempt_at=NULL,error=NULL WHERE organization_id=$1 AND status='failed' AND NOT EXISTS(SELECT 1 FROM trusted_evidence_reconciled_outbox r WHERE r.outbox_id=o.id) RETURNING id",
       [a.organizationId],
     );
     res.json({ retried: r.rowCount });

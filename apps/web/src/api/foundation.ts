@@ -6,6 +6,16 @@ import {
   type PageResult,
 } from '@hexpayroll/shared';
 import { API_BASE_URL } from './health';
+import { z } from 'zod';
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 export async function foundationRequest(
   path: string,
   token: string,
@@ -28,8 +38,17 @@ export async function foundationRequest(
   const payload: unknown = response.status === 204 ? null : await response.json();
   if (!response.ok) {
     if (response.status === 401) window.dispatchEvent(new Event('hex-session-invalid'));
-    const error = foundationErrorSchema.safeParse(payload);
-    throw new Error(error.success ? error.data.error.message : 'Local service request failed');
+    const known = foundationErrorSchema.safeParse(payload);
+    const error = known.success
+      ? known
+      : z
+          .object({ error: z.object({ code: z.string().max(100), message: z.string().max(4000) }) })
+          .safeParse(payload);
+    throw new ApiError(
+      response.status,
+      error.success ? error.data.error.code : 'REQUEST_FAILED',
+      error.success ? error.data.error.message : 'Local service request failed',
+    );
   }
   return payload;
 }

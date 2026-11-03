@@ -32,17 +32,19 @@ test(
       await migrate(f.migrator, f.migrations);
       const auth = createAuthService(f.runtime),
         password = 'Payroll integration test password 123!';
-      const user = await auth.createUser({
-        username: 'payrolltest',
-        displayName: 'Payroll Test',
-        password,
-      });
       const org = (
         await f.runtime.query(
           "INSERT INTO organizations(legal_name) VALUES('Payroll isolated test') RETURNING id",
         )
       ).rows[0]!.id as string;
-      await f.runtime.query('UPDATE auth_users SET organization_id=$1 WHERE id=$2', [org, user.id]);
+      await f.runtime.query('UPDATE application_setup SET organization_id=$1 WHERE singleton', [
+        org,
+      ]);
+      const user = await auth.createUser({
+        username: 'payrolltest',
+        displayName: 'Payroll Test',
+        password,
+      });
       await f.runtime.query(
         "INSERT INTO user_roles SELECT $1,id FROM roles WHERE code='administrator'",
         [user.id],

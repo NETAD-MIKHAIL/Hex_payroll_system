@@ -91,6 +91,71 @@ async function fixture(page: Page, viewer = false) {
         departments: 0,
         attendanceAvailable: true,
       };
+    else if (path === 'attendance-management/days')
+      body = {
+        date: '2026-10-02',
+        timezone: 'Asia/Manila',
+        page: 1,
+        pageSize: 25,
+        total: 1,
+        features: { capture: false, finalization: false, centralConfigured: false },
+        items: [
+          {
+            employee: { id: id(3), employeeNumber: 'E1', name: 'Ana Reyes' },
+            canonical: null,
+            provisional: attendance[0]
+              ? {
+                  ...attendance[0],
+                  first_in: attendance[0].firstIn,
+                  last_out: attendance[0].lastOut,
+                  worked_minutes: attendance[0].workedMinutes,
+                  late_minutes: 0,
+                  undertime_minutes: 0,
+                  attendance_status: 'present',
+                }
+              : null,
+          },
+        ],
+      };
+    else if (path === 'attendance-management/detail')
+      body = {
+        employee: { id: id(3), employeeNumber: 'E1', name: 'Ana Reyes' },
+        date: '2026-10-02',
+        timezone: 'Asia/Manila',
+        provisional: attendance[0] ?? null,
+        canonical: null,
+        schedule: null,
+        leave: leaves,
+        timeRecords: records,
+        rawPunches: [],
+        batches: [],
+        closures: [],
+        devices: [],
+        dependencies: [],
+        history: [],
+        mappings: [],
+        commands: [],
+        reconciliation: [],
+      };
+    else if (path === 'attendance-management/monitor')
+      body = {
+        devices: [],
+        unmatched: [],
+        dependencies: [],
+        receipts: [],
+        checkpoints: [],
+        attempts: [],
+        generatedAt: at,
+      };
+    else if (path === 'attendance-management/central/connection')
+      body = {
+        configured: false,
+        connected: false,
+        user: null,
+        expiresAt: null,
+        checkedAt: null,
+        reason: 'Central finalization is disabled',
+      };
     else if (path === 'employees') body = list([employee]);
     else if (path === 'employees/' + id(3)) body = employee;
     else if (['departments', 'positions', 'biometric-devices'].includes(path)) body = list([]);
@@ -211,7 +276,7 @@ async function fixture(page: Page, viewer = false) {
   await page.getByRole('button', { name: 'Sign In', exact: true }).click();
   await expect(page).toHaveURL(/dashboard/);
 }
-test('schedule, assignment, manual punches, leave approval and attendance approval remain usable with browser offline signal', async ({
+test('schedule, assignment, manual punches, leave approval and provisional attendance remain usable with browser offline signal', async ({
   page,
 }) => {
   await fixture(page);
@@ -266,15 +331,18 @@ test('schedule, assignment, manual punches, leave approval and attendance approv
   await expect(page.getByRole('cell', { name: 'approved', exact: true })).toBeVisible();
   await page.goto('/#/attendance');
   await page.getByLabel('Work date').fill('2026-10-02');
-  await page.getByRole('button', { name: 'Reprocess attendance' }).click();
-  await page.getByLabel('Start date').fill('2026-10-02');
-  await page.getByLabel('End date').fill('2026-10-02');
-  await page.getByLabel('Reason', { exact: true }).fill('Review test');
-  await page.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.getByRole('button', { name: 'Reprocess local results' }).click();
+  await page.getByLabel('Local reprocessing reason').fill('Review test');
+  await page.getByRole('button', { name: 'Schedule local calculation', exact: true }).click();
   await page.getByRole('button', { name: 'Ana Reyes', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Underlying time records' })).toBeVisible();
-  await page.getByRole('button', { name: 'Approve attendance', exact: true }).click();
-  await expect(page.getByRole('cell', { name: 'approved', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Approve attendance', exact: true })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByRole('button', { name: 'Finalize centrally', exact: true }),
+  ).toBeDisabled();
+  await expect(page.getByText('No trusted result received')).toBeVisible();
 });
 test('Viewer can inspect timekeeping pages but cannot access mutation controls', async ({
   page,

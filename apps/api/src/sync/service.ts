@@ -3,6 +3,72 @@ import type { Pool, PoolClient } from 'pg';
 import { syncPushSchema, type SyncEvent } from '@hexpayroll/shared';
 import { tokenHash } from '../auth/service.js';
 import { DomainError, transaction } from '../foundation/repository.js';
+import { requireBroadStreamsDisabled } from './pilot-scope.js';
+
+// Node enrollment grants transport access, never identity or evidence approval.
+// Also quarantine historical snapshots on pull; they are not trusted grants.
+const centralOnlyEntities = [
+  'attendance_pilot_scope',
+  'attendance_desktop_requests',
+  'attendance_desktop_outcomes',
+  'central_source_capabilities',
+  'central_attendance_coverage',
+  'central_attendance_exception_policies',
+  'central_source_closures',
+  'central_attendance_certifications',
+  'central_attendance_exception_resolutions',
+  'central_attendance_events',
+  'biometric_source_closures',
+  'biometric_closure_deliveries',
+  'biometric_closure_attempts',
+  'trusted_attendance_inbox',
+  'trusted_attendance_checkpoints',
+  'trusted_attendance_applications',
+  'trusted_attendance_state',
+  'trusted_attendance_application_state',
+  'central_attendance_evidence_reviews',
+  'central_attendance_requests',
+  'central_attendance_state',
+  'central_attendance_decisions',
+  'central_attendance_acceptance_history',
+  'central_biometric_sources',
+  'central_biometric_receipts',
+  'central_biometric_raw_evidence',
+  'biometric_raw_captures',
+  'biometric_capture_batches',
+  'biometric_batch_deliveries',
+  'central_identity_events',
+  'trusted_identity_inbox',
+  'trusted_identity_checkpoints',
+  'trusted_identity_applications',
+  'trusted_identity_application_state',
+  'trusted_actor_identities',
+  'trusted_evidence_reconciliations',
+  'trusted_evidence_reconciliation_applications',
+  'trusted_evidence_reconciled_outbox',
+  'auth_users',
+  'auth_sessions',
+  'roles',
+  'permissions',
+  'user_roles',
+  'role_permissions',
+  'sync_nodes',
+  'application_setup',
+  'central_evidence_authorizations',
+  'central_evidence_acceptances',
+  'central_evidence_events',
+  'trusted_evidence_inbox',
+  'trusted_evidence_applications',
+  'trusted_evidence_application_state',
+  'trusted_evidence_checkpoints',
+  'work_schedules',
+  'work_schedule_versions',
+  'work_schedule_days',
+  'employee_schedule_assignments',
+  'schedule_assignment_history',
+  'leave_types',
+  'leave_requests',
+];
 
 export interface SyncNode {
   id: string;
@@ -51,10 +117,17 @@ class IdentityConflict extends Error {
   }
 }
 export async function pushEvents(pool: Pool, token: string, input: unknown) {
-  const { events } = syncPushSchema.parse(input);
   try {
     return await transaction(pool, async (c) => {
       const node = await lockedNode(c, token);
+      await requireBroadStreamsDisabled(c);
+      const { events } = syncPushSchema.parse(input);
+      if (events.some((event) => centralOnlyEntities.includes(event.entityType)))
+        throw new DomainError(
+          403,
+          'SYNC_CENTRAL_AUTHORITY_REQUIRED',
+          'Protected evidence and authorization changes require central administration',
+        );
       const receipts: { eventId: string; sequence: string }[] = [];
       for (const e of events) {
         const existing = await c.query(
@@ -121,11 +194,12 @@ export async function pushEvents(pool: Pool, token: string, input: unknown) {
   }
 }
 export async function pullChanges(pool: Pool, token: string, after: string) {
+  await requireBroadStreamsDisabled(pool);
   return transaction(pool, async (c) => {
     const node = await lockedNode(c, token);
     const result = await c.query(
-      `SELECT sequence::text,"id" AS "changeId",organization_id AS "organizationId",source_node_id AS "sourceNodeId",source_event_id AS "eventId",entity_type AS "entityType",entity_id AS "entityId",operation,revision,payload_version AS "payloadVersion",payload FROM sync_changes WHERE organization_id=$1 AND sequence>$2 ORDER BY sync_changes.sequence LIMIT 3`,
-      [node.organization_id, after],
+      `SELECT sequence::text,"id" AS "changeId",organization_id AS "organizationId",source_node_id AS "sourceNodeId",source_event_id AS "eventId",entity_type AS "entityType",entity_id AS "entityId",operation,revision,payload_version AS "payloadVersion",payload FROM sync_changes WHERE organization_id=$1 AND sequence>$2 AND NOT (entity_type=ANY($3::text[])) ORDER BY sync_changes.sequence LIMIT 3`,
+      [node.organization_id, after, centralOnlyEntities],
     );
     // Include the originating node's events so one cursor traverses the whole stream.
     return { changes: result.rows, nextSequence: result.rows.at(-1)?.sequence ?? after };

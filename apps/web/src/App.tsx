@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { LoginPage } from './pages/LoginPage';
+import { DesktopSetup } from './components/DesktopSetup';
 import { AppLayout } from './layouts/AppLayout';
 import { DashboardPage } from './pages/DashboardPage';
 import { AttendancePage } from './pages/AttendancePage';
@@ -266,10 +267,12 @@ function AppRoutes() {
 }
 export default function App() {
   return (
-    <SystemHealthProvider>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
-    </SystemHealthProvider>
+    <DesktopSetup>
+      <SystemHealthProvider>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </SystemHealthProvider>
+    </DesktopSetup>
   );
 }

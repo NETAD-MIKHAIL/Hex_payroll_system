@@ -28,6 +28,12 @@ test(
         (error) =>
           Boolean(error && typeof error === 'object' && 'code' in error && error.code === '42501'),
       );
+      const org = (
+        await runtime.query<{ id: string }>(
+          "INSERT INTO organizations(legal_name) VALUES('Authentication test') RETURNING id",
+        )
+      ).rows[0]!.id;
+      await runtime.query('UPDATE application_setup SET organization_id=$1 WHERE singleton', [org]);
       const service = createAuthService(runtime);
       const password = '  payroll test password 😃  ';
       const user = await service.createUser({

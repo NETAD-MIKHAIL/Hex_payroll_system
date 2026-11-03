@@ -28,7 +28,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const previous = sessionRef.current;
       if (
         previous &&
-        (previous.user.organizationId !== value.user.organizationId ||
+        (previous.user.id !== value.user.id ||
+          previous.user.organizationId !== value.user.organizationId ||
           JSON.stringify(previous.user.permissions) !== JSON.stringify(value.user.permissions))
       ) {
         void queryClient.cancelQueries({
@@ -37,6 +38,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         queryClient.removeQueries({ queryKey: ['operations'] });
         queryClient.removeQueries({ queryKey: ['payroll'] });
+        queryClient.removeQueries({ queryKey: ['timekeeping'] });
       }
       sessionRef.current = value;
       setNotice(undefined);

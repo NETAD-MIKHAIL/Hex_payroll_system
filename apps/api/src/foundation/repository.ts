@@ -90,7 +90,7 @@ export async function getActor(database: Pool | PoolClient, userId: string): Pro
     permissions: Permission[];
     roles: string[];
   }>(
-    `SELECT u.id,u.organization_id,COALESCE(array_agg(DISTINCT p.permission_code) FILTER(WHERE p.permission_code IS NOT NULL),'{}') permissions,COALESCE(array_agg(DISTINCT r.code) FILTER(WHERE r.code IS NOT NULL),'{}') roles FROM auth_users u LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id LEFT JOIN role_permissions p ON p.role_id=r.id WHERE u.id=$1 AND u.active GROUP BY u.id`,
+    `SELECT u.id,u.organization_id,COALESCE(array_agg(DISTINCT p.permission_code) FILTER(WHERE p.permission_code IS NOT NULL),'{}') permissions,COALESCE(array_agg(DISTINCT r.code) FILTER(WHERE r.code IS NOT NULL),'{}') roles FROM auth_users u LEFT JOIN user_roles ur ON ur.user_id=u.id LEFT JOIN roles r ON r.id=ur.role_id LEFT JOIN role_permissions p ON p.role_id=r.id WHERE u.id=$1 AND u.active AND NOT u.identity_only AND NOT EXISTS(SELECT 1 FROM trusted_actor_identities t WHERE t.user_id=u.id AND NOT t.active) GROUP BY u.id`,
     [userId],
   );
   const row = found.rows[0];

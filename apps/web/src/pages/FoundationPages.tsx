@@ -1,4 +1,6 @@
 import { useState, type FormEvent } from 'react';
+import { DesktopEnrollment } from '../components/DesktopEnrollment';
+import { DesktopDevices } from '../components/DesktopDevices';
 import { EmployeeSchedule } from './TimekeepingPages';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
@@ -401,6 +403,7 @@ export function MasterPage({
       : ['code', 'name', 'status'];
   return (
     <div className="space-y-5">
+      {kind === 'biometric-devices' && <DesktopDevices />}
       <div className="flex flex-wrap gap-3">
         <input
           aria-label="Search records"
@@ -1378,6 +1381,7 @@ export function SyncPage() {
   const data = query.data as Record<string, unknown> | undefined;
   return (
     <div className="space-y-5">
+      <DesktopEnrollment />
       <p className="notice">
         {data?.configured
           ? 'Sync transport is configured. Delivered events are stored durably; business records are not yet replicated.'

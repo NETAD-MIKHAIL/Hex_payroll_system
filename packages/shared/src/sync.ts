@@ -64,3 +64,94 @@ export const syncRegistrationResponseSchema = z
   .strict();
 export type SyncEvent = z.infer<typeof syncEventSchema>;
 export type SyncChange = z.infer<typeof syncChangeSchema>;
+
+// Separate opt-in stream: v1 cursors never traverse or skip trusted evidence.
+export const trustedEvidenceActions = {
+  'schedule.create': 'work_schedules',
+  'schedule.update': 'work_schedules',
+  'schedule.status': 'work_schedules',
+  'assignment.create': 'employee_schedule_assignments',
+  'assignment.update': 'employee_schedule_assignments',
+  'leaveType.create': 'leave_types',
+  'leaveType.update': 'leave_types',
+  'leave.request': 'leave_requests',
+  'leave.approve': 'leave_requests',
+  'leave.reject': 'leave_requests',
+  'leave.cancel': 'leave_requests',
+} as const;
+export function canonicalSyncJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return '[' + value.map(canonicalSyncJson).join(',') + ']';
+  return (
+    '{' +
+    Object.keys(value)
+      .sort()
+      .map(
+        (key) =>
+          JSON.stringify(key) + ':' + canonicalSyncJson((value as Record<string, unknown>)[key]),
+      )
+      .join(',') +
+    '}'
+  );
+}
+const fingerprint = z.string().regex(/^[a-f0-9]{64}$/);
+export const trustedEvidenceEnvelopeSchema = z
+  .object({
+    protocolVersion: z.literal(2),
+    origin: z.literal('central.accepted'),
+    sequence: syncSequenceSchema.refine((value) => value !== '0'),
+    eventId: z.uuid(),
+    acceptanceId: z.uuid(),
+    authorizationDecisionId: z.uuid(),
+    authorizationRequestId: z.uuid(),
+    authorizationFingerprint: fingerprint,
+    organizationId: z.uuid(),
+    entityId: z.uuid(),
+    entityType: z.enum([
+      'work_schedules',
+      'employee_schedule_assignments',
+      'leave_types',
+      'leave_requests',
+    ]),
+    action: z.enum(
+      Object.keys(trustedEvidenceActions) as [
+        keyof typeof trustedEvidenceActions,
+        ...(keyof typeof trustedEvidenceActions)[],
+      ],
+    ),
+    expectedRevision: z.number().int().min(0).max(2147483646),
+    resultingRevision: z.number().int().positive().max(2147483647),
+    acceptedBy: z.uuid(),
+    sourceNodeId: z.uuid(),
+    acceptedAt: z.iso.datetime({ offset: true }),
+    snapshot: z.record(z.string(), z.json()).refine((value) => payloadBytes(value) <= 262144),
+    snapshotFingerprint: fingerprint,
+  })
+  .strict()
+  .superRefine((event, ctx) => {
+    const create = [
+      'schedule.create',
+      'assignment.create',
+      'leaveType.create',
+      'leave.request',
+    ].includes(event.action);
+    if (
+      event.entityType !== trustedEvidenceActions[event.action] ||
+      event.resultingRevision !== event.expectedRevision + 1 ||
+      create !== (event.expectedRevision === 0) ||
+      event.acceptanceId === event.authorizationDecisionId ||
+      event.snapshot.id !== event.entityId ||
+      event.snapshot.organizationId !== event.organizationId ||
+      event.snapshot.revision !== event.resultingRevision
+    )
+      ctx.addIssue({ code: 'custom', message: 'Inconsistent trusted evidence binding' });
+  });
+export const trustedEvidencePullSchema = z
+  .object({
+    protocolVersion: z.literal(2),
+    origin: z.literal('central.accepted'),
+    changes: z.array(trustedEvidenceEnvelopeSchema).max(3),
+    nextSequence: syncSequenceSchema,
+  })
+  .strict();
+export type TrustedEvidenceEnvelope = z.infer<typeof trustedEvidenceEnvelopeSchema>;

@@ -1,8 +1,7 @@
 # electron-builder configuration.
 #
-# PHASE 0: present and coherent, but packaging is NOT part of the Phase 0
-# acceptance criteria. Installer production happens in Phase 4, together with
-# bundling the private PostgreSQL cluster.
+# Offline Windows resources are staged explicitly by prepare:resources.
+# Signed release packaging is the default; unsigned builds are rehearsal only.
 appId: ph.hexpayroll.desktop
 productName: Hex Payroll
 copyright: Copyright © 2026 Hex Payroll
@@ -17,21 +16,35 @@ files:
   - package.json
 
 # apps/web's production build is shipped alongside the app and loaded over
-# file:// by the main process — see apps/desktop/src/main/index.ts.
+# a private loopback server in main — see apps/desktop/src/main/index.ts.
 extraResources:
   - from: ../web/dist
     to: web
+    filter: ['**/*', '!**/*.map']
+  - from: build/standalone
+    to: .
+
+asar: true
+forceCodeSigning: true
+beforePack: ./scripts/audit-resources.cjs
+afterAllArtifactBuild: ./scripts/artifact-checksums.cjs
+artifactName: Hex-Payroll-${version}-${arch}-Setup.${ext}
 
 win:
+  requestedExecutionLevel: asInvoker
   target:
-    - nsis
+    - target: nsis
+      arch: [x64]
   # Code signing is REQUIRED before distributing to real users: an unsigned
   # installer triggers Windows SmartScreen warnings on every machine.
 
 nsis:
   oneClick: false
   perMachine: false
-  allowToChangeInstallationDirectory: true
+  allowElevation: false
+  deleteAppDataOnUninstall: false
+  runAfterFinish: false
+  allowToChangeInstallationDirectory: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
 

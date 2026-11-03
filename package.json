@@ -12,6 +12,8 @@
     "dev": "concurrently -k --success first -n api,web,desktop -c blue,magenta,green \"pnpm --filter @hexpayroll/api dev\" \"pnpm --filter @hexpayroll/web dev\" \"pnpm --filter @hexpayroll/desktop dev\"",
     "dev:browser": "concurrently -k -n api,web -c blue,magenta \"pnpm --filter @hexpayroll/api dev\" \"pnpm --filter @hexpayroll/web dev\"",
     "dev:desktop": "pnpm --filter @hexpayroll/desktop dev",
+    "package:win": "pnpm build && pnpm --filter @hexpayroll/desktop prepare:resources && pnpm --filter @hexpayroll/desktop package",
+    "package:win:rehearsal": "pnpm build && pnpm --filter @hexpayroll/desktop prepare:resources && pnpm --filter @hexpayroll/desktop package:rehearsal",
     "build": "pnpm -r --stream build",
     "typecheck": "pnpm --filter @hexpayroll/shared build && pnpm --filter @hexpayroll/payroll-engine build && pnpm -r typecheck",
     "lint": "eslint .",
